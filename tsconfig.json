@@ -5,6 +5,11 @@
     "allowJs": true,
     "noEmit": true,
     "strict": true,
-    "esModuleInterop": true
-  }
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "exclude": [
+    "node_modules",
+    "node_modules/typescript/lib/lib.dom.d.ts"
+  ]
 }
