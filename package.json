@@ -6,8 +6,14 @@
   "main": "agent/index.ts",
   "scripts": {
     "prepare": "npm run build",
-    "build": "frida-compile agent/index.ts -o _agent.js -c",
-    "watch": "frida-compile agent/index.ts -o _agent.js -w"
+    "build": "frida-compile agent/index.ts -o dist/_agent.js -c",
+    "watch": "frida-compile agent/index.ts -o agent/_agent.js -w",
+    "start": "frida -l agent/_agent.js WeChat.exe",
+    "watch:xp": "frida-compile agent/xp-3.9.2.23.ts -o agent/xp-3.9.2.23.js -w",
+    "start:xp": "frida -l agent/xp-3.9.2.23.js WeChat.exe",
+    "watch:xp:3.9.9.43": "frida-compile agent/xp-3.9.9.43.ts -o agent/xp-3.9.9.43.js -w",
+    "start:xp:3.9.9.43": "frida -l agent/xp-3.9.9.43.js WeChat.exe"
+    
   },
   "devDependencies": {
     "@types/frida-gum": "^18.5.1",
