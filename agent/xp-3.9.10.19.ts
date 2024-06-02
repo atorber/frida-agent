@@ -110,7 +110,7 @@ const readStringPtr = (address: any) => {
   return addr
 }
 
-const readWStringPtr = (address: any) => {
+const readWStringPtr1 = (address: any) => {
   const addr: any = ptr(address)
   const size = addr.add(4).readU32()
   const capacity = addr.add(8).readU32()
@@ -122,12 +122,112 @@ const readWStringPtr = (address: any) => {
     return addr.size ? addr.ptr._readUtf16String(addr.size * 2) : ''
   }
 
-  // console.info('readWStringPtr() address:',address,' -> ptr:', addr.ptr, 'size:', addr.size, 'capacity:', addr.capacity)
-  // console.info('readWStringPtr() str:' ,  `"${addr.readUtf16String()}"`,'\n',addr.ptr.readByteArray(addr.size*2+2),'\n')
-  // console.info('readWStringPtr() address:', addr,'dump:', addr.readByteArray(16),'\n')
-
   return addr
 }
+
+const writeWStringPtr = (str:string) => {
+  console.log(`输入字符串内容: ${str}`);
+  const strLength = str.length;
+  console.log(`字符串长度: ${strLength}`);
+
+  // 计算UTF-16编码的字节长度（每个字符2个字节）
+  const utf16Length = strLength * 2;
+
+  // 计算我们需要为字符串对象结构分配的总内存空间，结构包含：指针 (Process.pointerSize) + 长度 (4 bytes) + 容量 (4 bytes)
+  const structureSize = Process.pointerSize + 4 + 4;
+  
+  // 为字符串数据和结构体分配连续的内存空间
+  const totalSize = utf16Length + 2 + structureSize; // +2 用于 null 终止符
+  const basePointer = Memory.alloc(totalSize);
+  
+  // 将结构体指针定位到分配的内存起始位置
+  const structurePointer = basePointer;
+  console.log(`字符串分配空间内存指针: ${structurePointer}`);
+  
+  // 将字符串数据指针定位到结构体之后的位置
+  const stringDataPointer = basePointer.add(structureSize);
+  console.log(`字符串保存地址指针: ${stringDataPointer}`);
+
+  // 将 JavaScript 字符串转换成 UTF-16 编码格式，并写入分配的内存空间
+  stringDataPointer.writeUtf16String(str);
+  console.log(`写入字符串到地址: ${stringDataPointer.readUtf16String()}`);
+
+  // 检查分配的内存内容
+  const allocatedMemoryContent = stringDataPointer.readUtf16String();
+  console.log(`检查分配的内存内容: ${allocatedMemoryContent}`);
+
+  // 在分配的内存空间中写入字符串对象的信息
+  // 写入字符串数据指针
+  structurePointer.writePointer(stringDataPointer);
+  console.log(`写入字符串地址存放指针: ${structurePointer.readPointer()}`);
+  console.log(`写入字符串内容确认: ${structurePointer.readPointer().readUtf16String()}`);
+
+  // 写入字符串长度（确保是长度，不包含 null 终止符）
+  structurePointer.add(Process.pointerSize).writeU32(strLength);
+  console.log(`写入字符串长度指针: ${structurePointer.add(Process.pointerSize)}`);
+
+  // 写入字符串容量，这里我们假设容量和长度是相同的
+  structurePointer.add(Process.pointerSize + 4).writeU32(strLength);
+  console.log(`写入字符串容量指针: ${structurePointer.add(Process.pointerSize + 4)}`);
+
+  console.log(`写入字符串内容再次确认: ${structurePointer.readPointer().readUtf16String()}`);
+  console.log(`写入字符地址再次确认: ${structurePointer.readPointer()}`);
+  console.log(`读取32位测试: ${structurePointer.readPointer().readS32()}`);
+  console.log(`return写入字符串结构体: ${structurePointer}`);
+  
+  // 返回分配的结构体表面的起始地址
+  return structurePointer;
+};
+
+const readWStringPtr = (addr: any) => {
+  console.log(`input读取字符串地址指针4: ${addr}`);
+  console.log(`读取字符串内容指针4: ${addr.readPointer().readUtf16String()}`);
+  const stringPointer = addr.readPointer();
+  console.log(`读取数据指针地址1: ${stringPointer}`);
+  console.log(`读取数据指针内容1: ${stringPointer.readUtf16String()}`);
+
+  const size = addr.add(Process.pointerSize).readU32();
+  console.log(`读取字符串长度: ${size}`);
+
+  const capacity = addr.add(Process.pointerSize + 4).readU32();
+  // console.log(`读取字符串容量: ${capacity}`);
+
+  return {
+    ptr: stringPointer,
+    size: size,
+    capacity: capacity,
+    readUtf16String: () => {
+      // UTF-16字符串长度需要乘以2，因为每个字符占2个字节
+      const content = size ? stringPointer.readUtf16String()?.replace(/\0+$/, '') : '';
+      console.log(`读取字符串内容: ${content}`);
+      return content;
+    }
+  };
+};
+
+const testReadWStringPtr = () => {
+  console.log('\n\n读写测试开始：');
+
+  const originalString = "Hello, World!";
+  const pointer = writeWStringPtr(originalString);
+  console.log(`读取32位测试: ${pointer.readPointer().readS32()}`);
+  console.log(`外部读取指针: ${pointer.readPointer()}`);
+  console.log(`外部读取: ${pointer.readPointer().readUtf16String()}`);
+
+  // // 读取内存内容，检查是否正确写入
+  const memoryPointer = pointer.readPointer();
+  const memoryContent = memoryPointer.readUtf16String();
+  console.log(`外部直接读取内存: ${memoryContent}`);
+
+  const readStruct = readWStringPtr(pointer).readUtf16String();
+
+  console.log("Original String: ", originalString);
+  console.log("Read String: ", readStruct);
+  console.log("Strings are equal: ", originalString === readStruct);
+  console.log('\n\n');
+}
+
+// testReadWStringPtr();
 
 const readString = (address: any) => {
   return readStringPtr(address).readUtf8String()
@@ -139,7 +239,7 @@ const readWideString = (address: any) => {
 
 const checkLogin = () => {
   let success = -1;
-  const accout_service_addr = moduleBaseAddress.add(wxOffsets.login.WX_ACCOUNT_SERVICE_OFFSET);
+  const accout_service_addr = moduleBaseAddress.add(wxOffsets.kGetAccountServiceMgr);
   // 创建原生函数对象，此处假设该函数返回'pointer'并且不需要输入参数
   let getAccountService = new NativeFunction(accout_service_addr, 'pointer', []);
   // 调用原生函数并获取服务地址
@@ -154,12 +254,12 @@ const checkLogin = () => {
   return success;
 }
 
-console.info(new Date().toUTCString() + ' checkLogin:', checkLogin())
+// console.info(new Date().toUTCString() + ' checkLogin:', checkLogin())
 
 // 检查是否已登录
 const isLoggedInFunction = () => {
   let success = -1
-  const accout_service_addr = moduleBaseAddress.add(wxOffsets.login.WX_ACCOUNT_SERVICE_OFFSET)
+  const accout_service_addr = moduleBaseAddress.add(wxOffsets.kGetAccountServiceMgr)
   const callFunction = new NativeFunction(accout_service_addr, 'pointer', [])
   const service_addr = callFunction()
   // console.info('service_addr:', service_addr)
@@ -180,7 +280,7 @@ const isLoggedInFunction = () => {
 const hookLoginEventCallback = (() => {
   const nativeCallback = new NativeCallback(() => { }, 'void', [])
   const nativeativeFunction = new NativeFunction(nativeCallback, 'void', [])
-  Interceptor.attach(moduleBaseAddress.add(wxOffsets.login.WX_ACCOUNT_SERVICE_OFFSET), {
+  Interceptor.attach(moduleBaseAddress.add(wxOffsets.kGetAccountServiceMgr), {
     onLeave: function (retval) {
       // console.info('hookLoginEventCallback:', retval)
       const isLoggedIn = isLoggedInFunction()
@@ -227,7 +327,7 @@ const getMyselfInfoFunction = () => {
   var serviceAddr = GetService();
 
   // 必要的辅助函数
-  function readWeChatString(addr, offset) {
+  function readWeChatString(addr: NativePointer, offset: number) {
     if (addr.add(offset).readU32() === 0 || addr.add(offset + 0x10).readU32() === 0) {
       return '';
     }
@@ -416,7 +516,7 @@ const getMyselfInfoFunction = () => {
 
 }
 
-console.info('getMyselfInfoFunction:', getMyselfInfoFunction())
+// console.info('getMyselfInfoFunction:', getMyselfInfoFunction())
 
 // 原始实现
 function GetSelfInfo() {
@@ -436,7 +536,7 @@ function GetSelfInfo() {
   var serviceAddr = GetService();
 
   // 必要的辅助函数
-  function readWeChatString(addr, offset) {
+  function readWeChatString(addr: NativePointer, offset: number) {
     if (addr.add(offset).readU32() === 0 || addr.add(offset + 0x10).readU32() === 0) {
       return '';
     }
@@ -616,89 +716,25 @@ function GetSelfInfo() {
   return { success: success, data: out };
 }
 
-// console.info('GetSelfInfo:', JSON.stringify(GetSelfInfo(), null, 2))
-
-// int64_t wechat::WeChatService::SendTextMsg(const std::wstring& wxid,
-//   const std::wstring& msg) {
-// prototype::WeChatString to_user(wxid);
-// prototype::WeChatString text_msg(msg);
-// uint64_t send_message_mgr_addr = base_addr_ + offset::kGetSendMessageMgr;
-// uint64_t send_text_msg_addr = base_addr_ + offset::kSendTextMsg;
-// uint64_t free_chat_msg_addr = base_addr_ + offset::kFreeChatMsg;
-// char chat_msg[0x460] = {0};
-// uint64_t temp[3] = {0};
-// func::__GetSendMessageMgr mgr;
-// mgr = (func::__GetSendMessageMgr)send_message_mgr_addr;
-// func::__SendTextMsg send;
-// send = (func::__SendTextMsg)send_text_msg_addr;
-// func::__FreeChatMsg free;
-// free = (func::__FreeChatMsg)free_chat_msg_addr;
-// mgr();
-// uint64_t success = send(reinterpret_cast<uint64_t>(&chat_msg),
-// reinterpret_cast<uint64_t>(&to_user),
-// reinterpret_cast<uint64_t>(&text_msg),
-// reinterpret_cast<uint64_t>(&temp), 1, 1, 0, 0);
-// free(reinterpret_cast<uint64_t>(&chat_msg));
-// return 0;
-// }
-
-class WeChatString {
-  ptr: NativePointer;
-  length: number;
-  maxLength: number;
-  cPtr: number;
-  cLen: number;
-  constructor(stringOrPtr) {
-    this.length = 0;
-    this.maxLength = 0;
-    this.cPtr = 0;
-    this.cLen = 0;
-
-    if (typeof stringOrPtr === 'string') {
-      this.setString(stringOrPtr);
-    } else {
-      this.setPointer(stringOrPtr);
-    }
-  }
-
-  setString(str) {
-    const strLen = str.length;
-    // 必须为字符串分配两倍长度的空间来存储 UTF-16 编码的 wchar_t 字符
-    this.ptr = Memory.alloc((strLen + 1) * 2); // 包括 NULL 结尾，每个 wchar_t 2字节
-    this.ptr.writeUtf16String(str);
-    this.length = strLen;
-    this.maxLength = strLen;
-  }
-
-  setPointer(ptr) {
-    // 假设 ptr 已经是一个有效的内存块地址，指向正确的字符串
-    this.ptr = ptr;
-    this.length = ptr.add(Process.pointerSize * 2).readU32();
-    this.maxLength = ptr.add(Process.pointerSize * 2).readU32();
-    // 实际使用中需要根据实际内存结构调整长度和最大长度的位置
-  }
-
-  getMemoryAddress() {
-    // 表示这个结构体在内存中的位置
-    const structMemory = Memory.alloc(Process.pointerSize * 5); // 分配内存以存储结构体
-    structMemory.writePointer(this.ptr);
-    structMemory.add(Process.pointerSize).writeU32(this.length);
-    structMemory.add(Process.pointerSize * 2).writeU32(this.maxLength);
-    structMemory.add(Process.pointerSize * 3).writeU64(this.cPtr);
-    structMemory.add(Process.pointerSize * 4).writeU32(this.cLen);
-    return structMemory;
-  }
-}
-
-function SendTextMsg(wxid:string, msg:string) {
-
+// 发送文本消息
+const sendMsgNativeFunction = (talkerId: any, content: any) => {
+  console.log('\n\n');
+  let to_user: any = null
+  let text_msg: any = null
   // const to_user = Memory.alloc(wxid.length * 2 + 2)
   // to_user.writeUtf16String(wxid)
-  const to_user = new WeChatString(wxid).getMemoryAddress();
+  // to_user = new WeChatString(wxid).getMemoryAddress();
+  // console.info('wxid:', wxid)
+  to_user = writeWStringPtr(talkerId);
+  console.info('to_user wxid :', readWStringPtr(to_user).readUtf16String());
 
   // const text_msg = Memory.alloc(msg.length * 2 + 2)
   // text_msg.writeUtf16String(msg)
-  const text_msg = new WeChatString(msg).getMemoryAddress();
+  // text_msg = new WeChatString(msg).getMemoryAddress();
+
+  text_msg = writeWStringPtr(content);
+  console.info('text_msg msg:', readWStringPtr(text_msg).readUtf16String());
+  console.log('\n\n');
 
   var send_message_mgr_addr = moduleBaseAddress.add(wxOffsets.kGetSendMessageMgr);
   var send_text_msg_addr = moduleBaseAddress.add(wxOffsets.kSendTextMsg);
@@ -733,75 +769,24 @@ function SendTextMsg(wxid:string, msg:string) {
   return 0; // 与C++代码保持一致，这里返回0（虽然在C++中这里应该是成功与否的指示符）
 }
 
-SendTextMsg('filehelper', 'a');
+sendMsgNativeFunction('filehelper', 'Hello, World!')
 
-// 发送文本消息
-const sendMsgNativeFunction = (talkerId: any, content: any) => {
+Interceptor.attach(
+  moduleBaseAddress.add(wxOffsets.kSendTextMsg), {
+  onEnter(args) {
+    try {
+      // 参数打印
+      console.log("sendTextMsg called with args: " + args[0] + "," + args[1] + "," + args[2] + "," + args[3] + "," + args[4] + "," + args[5] + "," + args[6] + "," + args[7]);
+      const wxid = readWStringPtr(args[1]).readUtf16String();
+      const msg = readWStringPtr(args[2]).readUtf16String();
+      console.log("wxid: " + wxid + ", msg: " + msg);
 
-  const txtAsm: any = Memory.alloc(Process.pageSize)
-  // const buffwxid = Memory.alloc(0x20)
-
-  const wxidPtr: any = Memory.alloc(talkerId.length * 2 + 2)
-  wxidPtr.writeUtf16String(talkerId)
-
-  const picWxid = Memory.alloc(0x0c)
-  picWxid.writePointer(ptr(wxidPtr)).add(0x04)
-    .writeU32(talkerId.length * 2).add(0x04)
-    .writeU32(talkerId.length * 2).add(0x04)
-
-  const contentPtr = Memory.alloc(content.length * 2 + 2)
-  contentPtr.writeUtf16String(content)
-
-  const sizeOfStringStruct = Process.pointerSize * 5
-  const contentStruct = Memory.alloc(sizeOfStringStruct)
-
-  contentStruct
-    .writePointer(contentPtr).add(0x4)
-    .writeU32(content.length).add(0x4)
-    .writeU32(content.length * 2)
-
-  const ecxBuffer = Memory.alloc(0x2d8)
-
-  Memory.patchCode(txtAsm, Process.pageSize, code => {
-    const cw = new X86Writer(code, {
-      pc: txtAsm,
-    })
-    cw.putPushfx()
-    cw.putPushax()
-
-    cw.putPushU32(0x0)
-    cw.putPushU32(0x0)
-    cw.putPushU32(0x0)
-    cw.putPushU32(0x1)
-    cw.putPushU32(0x0)
-
-    // cw.putMovRegReg
-
-    cw.putMovRegAddress('eax', contentStruct)
-    cw.putPushReg('eax')
-
-    cw.putMovRegAddress('edx', picWxid) // room_id
-
-    cw.putMovRegAddress('ecx', ecxBuffer)
-    cw.putCallAddress(moduleBaseAddress.add(
-      wxOffsets.kSendTextMsg,
-    ))
-
-    cw.putAddRegImm('esp', 0x18)
-    cw.putPopax()
-    cw.putPopfx()
-    cw.putRet()
-    cw.flush()
-
-  })
-
-  // console.info('----------txtAsm', txtAsm)
-  const nativeativeFunction = new NativeFunction(ptr(txtAsm), 'void', [])
-  nativeativeFunction()
-
-}
-
-// sendMsgNativeFunction('filehelper', 'Hello, World!')
+    } catch (e: any) {
+      console.error('接收消息回调失败：', e)
+      throw new Error(e)
+    }
+  },
+})
 
 // // 接收消息回调
 const recvMsgNativeCallback = (() => {
@@ -958,7 +943,7 @@ const recvMsgNativeCallbackTest = (() => {
 
 })
 
-recvMsgNativeCallbackTest()
+// recvMsgNativeCallbackTest()
 
 interface WeChatMessage {
   // 发送者的用户标识
@@ -991,7 +976,7 @@ interface WeChatMessage {
   base64Img?: string;
 }
 
-function ReadWeChatStr(addr) {
+function ReadWeChatStr(addr: any) {
   // console.log("addr: " + addr);
   addr = ptr(addr);
   var len = addr.add(0x10).readS64(); // 使用 ptr的`.readS64`方法
@@ -1013,7 +998,7 @@ function ReadWeChatStr(addr) {
   return res;
 }
 
-function ReadSKBuiltinString(addr) {
+function ReadSKBuiltinString(addr: { add: (arg0: number) => string | number; }) {
   var inner_string = ptr(addr.add(0x8)).readS64();
   // console.log("inner_string: " + inner_string);
 
@@ -1021,7 +1006,7 @@ function ReadSKBuiltinString(addr) {
   return ReadWeChatStr(inner_string);
 }
 
-const ReadSKBuiltinBuffer = (addr) => {
+const ReadSKBuiltinBuffer = (addr: any) => {
   addr = ptr(addr);
   //   // 读取地址偏移0x10处的长度
   //   INT64 len = *(INT64 *)(addr + 0x10);
@@ -1047,7 +1032,7 @@ const ReadSKBuiltinBuffer = (addr) => {
   return ReadWeChatStr(inner_string);
 }
 
-function HandleSyncMsg(param1, param2, param3) {
+function HandleSyncMsg(param1: NativePointer, param2: any, param3: NativePointer) {
   // console.log("HandleSyncMsg called with param2: " + param2);
   const msg: WeChatMessage = {
     fromUser: '',
