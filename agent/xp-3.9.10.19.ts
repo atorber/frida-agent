@@ -1,10 +1,14 @@
 /**
- * WeChat 3.9.9.43
+ * WeChat 3.9.10.19
  * 
  */
 
 // 偏移地址,来自于wxhelper项目
 import { wxOffsets_3_9_10_19 as wxOffsets } from './offset.js';
+
+Socket.listen({
+  port: 8888,
+})
 
 // 当前支持的微信版本
 const availableVersion = 1661534743 // 3.9.2.23  ==0x63090217
@@ -128,7 +132,7 @@ const readWStringPtr1 = (address: any) => {
 const writeWStringPtr = (str:string) => {
   console.log(`输入字符串内容: ${str}`);
   const strLength = str.length;
-  console.log(`字符串长度: ${strLength}`);
+  // console.log(`字符串长度: ${strLength}`);
 
   // 计算UTF-16编码的字节长度（每个字符2个字节）
   const utf16Length = strLength * 2;
@@ -142,52 +146,52 @@ const writeWStringPtr = (str:string) => {
   
   // 将结构体指针定位到分配的内存起始位置
   const structurePointer = basePointer;
-  console.log(`字符串分配空间内存指针: ${structurePointer}`);
+  // console.log(`字符串分配空间内存指针: ${structurePointer}`);
   
   // 将字符串数据指针定位到结构体之后的位置
   const stringDataPointer = basePointer.add(structureSize);
-  console.log(`字符串保存地址指针: ${stringDataPointer}`);
+  // console.log(`字符串保存地址指针: ${stringDataPointer}`);
 
   // 将 JavaScript 字符串转换成 UTF-16 编码格式，并写入分配的内存空间
   stringDataPointer.writeUtf16String(str);
-  console.log(`写入字符串到地址: ${stringDataPointer.readUtf16String()}`);
+  // console.log(`写入字符串到地址: ${stringDataPointer.readUtf16String()}`);
 
   // 检查分配的内存内容
   const allocatedMemoryContent = stringDataPointer.readUtf16String();
-  console.log(`检查分配的内存内容: ${allocatedMemoryContent}`);
+  // console.log(`检查分配的内存内容: ${allocatedMemoryContent}`);
 
   // 在分配的内存空间中写入字符串对象的信息
   // 写入字符串数据指针
   structurePointer.writePointer(stringDataPointer);
-  console.log(`写入字符串地址存放指针: ${structurePointer.readPointer()}`);
-  console.log(`写入字符串内容确认: ${structurePointer.readPointer().readUtf16String()}`);
+  // console.log(`写入字符串地址存放指针: ${structurePointer.readPointer()}`);
+  // console.log(`写入字符串内容确认: ${structurePointer.readPointer().readUtf16String()}`);
 
   // 写入字符串长度（确保是长度，不包含 null 终止符）
   structurePointer.add(Process.pointerSize).writeU32(strLength);
-  console.log(`写入字符串长度指针: ${structurePointer.add(Process.pointerSize)}`);
+  // console.log(`写入字符串长度指针: ${structurePointer.add(Process.pointerSize)}`);
 
   // 写入字符串容量，这里我们假设容量和长度是相同的
   structurePointer.add(Process.pointerSize + 4).writeU32(strLength);
-  console.log(`写入字符串容量指针: ${structurePointer.add(Process.pointerSize + 4)}`);
+  // console.log(`写入字符串容量指针: ${structurePointer.add(Process.pointerSize + 4)}`);
 
-  console.log(`写入字符串内容再次确认: ${structurePointer.readPointer().readUtf16String()}`);
-  console.log(`写入字符地址再次确认: ${structurePointer.readPointer()}`);
-  console.log(`读取32位测试: ${structurePointer.readPointer().readS32()}`);
-  console.log(`return写入字符串结构体: ${structurePointer}`);
+  // console.log(`写入字符串内容再次确认: ${structurePointer.readPointer().readUtf16String()}`);
+  // console.log(`写入字符地址再次确认: ${structurePointer.readPointer()}`);
+  // console.log(`读取32位测试: ${structurePointer.readPointer().readS32()}`);
+  // console.log(`return写入字符串结构体: ${structurePointer}`);
   
   // 返回分配的结构体表面的起始地址
   return structurePointer;
 };
 
 const readWStringPtr = (addr: any) => {
-  console.log(`input读取字符串地址指针4: ${addr}`);
-  console.log(`读取字符串内容指针4: ${addr.readPointer().readUtf16String()}`);
+  // console.log(`input读取字符串地址指针4: ${addr}`);
+  // console.log(`读取字符串内容指针4: ${addr.readPointer().readUtf16String()}`);
   const stringPointer = addr.readPointer();
-  console.log(`读取数据指针地址1: ${stringPointer}`);
-  console.log(`读取数据指针内容1: ${stringPointer.readUtf16String()}`);
+  // console.log(`读取数据指针地址1: ${stringPointer}`);
+  // console.log(`读取数据指针内容1: ${stringPointer.readUtf16String()}`);
 
   const size = addr.add(Process.pointerSize).readU32();
-  console.log(`读取字符串长度: ${size}`);
+  // console.log(`读取字符串长度: ${size}`);
 
   const capacity = addr.add(Process.pointerSize + 4).readU32();
   // console.log(`读取字符串容量: ${capacity}`);
@@ -718,7 +722,7 @@ function GetSelfInfo() {
 
 // 发送文本消息
 const sendMsgNativeFunction = (talkerId: any, content: any) => {
-  console.log('\n\n');
+  // console.log('\n\n');
   let to_user: any = null
   let text_msg: any = null
   // const to_user = Memory.alloc(wxid.length * 2 + 2)
@@ -734,7 +738,7 @@ const sendMsgNativeFunction = (talkerId: any, content: any) => {
 
   text_msg = writeWStringPtr(content);
   console.info('text_msg msg:', readWStringPtr(text_msg).readUtf16String());
-  console.log('\n\n');
+  // console.log('\n\n');
 
   var send_message_mgr_addr = moduleBaseAddress.add(wxOffsets.kGetSendMessageMgr);
   var send_text_msg_addr = moduleBaseAddress.add(wxOffsets.kSendTextMsg);
@@ -755,13 +759,13 @@ const sendMsgNativeFunction = (talkerId: any, content: any) => {
   mgr();
 
   // 发送文本消息
-  console.info('chat_msg:', chat_msg);
-  console.info('to_user:', to_user);
-  console.info('text_msg:', text_msg);
-  console.info('temp:', temp);
+  // console.info('chat_msg:', chat_msg);
+  // console.info('to_user:', to_user);
+  // console.info('text_msg:', text_msg);
+  // console.info('temp:', temp);
   var success = send(chat_msg, to_user, text_msg, temp, 1, 1, 0, 0);
 
-  console.info('success:', success);
+  console.info('sendText success:', success);
 
   // 释放ChatMsg内存
   free(chat_msg);
@@ -769,7 +773,7 @@ const sendMsgNativeFunction = (talkerId: any, content: any) => {
   return 0; // 与C++代码保持一致，这里返回0（虽然在C++中这里应该是成功与否的指示符）
 }
 
-sendMsgNativeFunction('filehelper', 'Hello, World!')
+sendMsgNativeFunction('filehelper', new Date().toUTCString() + 'Hello, World!')
 
 Interceptor.attach(
   moduleBaseAddress.add(wxOffsets.kSendTextMsg), {
@@ -849,7 +853,7 @@ const recvMsgNativeCallback = (() => {
           const newMsg = {
             msgType, talkerId, content, room, signature, isMyMsg
           }
-          console.log(JSON.stringify(newMsg, null, 2))
+          console.log('回调消息:', JSON.stringify(newMsg))
           setImmediate(() => nativeativeFunction(msgType, myTalkerIdPtr, myContentPtr, myGroupMsgSenderIdPtr, myXmlContentPtr, isMyMsg))
 
         } catch (e: any) {
@@ -1058,10 +1062,11 @@ function HandleSyncMsg(param1: NativePointer, param2: any, param3: NativePointer
 
   // 根据消息类型处理图片消息
   if (msg['type'] == 3) {
-    const img = ReadSKBuiltinBuffer(param2.add(0x40).readS64()); // 读取图片数据
+    // const img = ReadSKBuiltinBuffer(param2.add(0x40).readS64()); // 读取图片数据
+    const img = ReadSKBuiltinString(param2.add(0x40).readS64()); // 读取图片数据
     console.log("img: " + img);
     msg.base64Img = img; // 将图片数据编码为Base64字符串
   }
-  // console.log("HandleSyncMsg msg: " + JSON.stringify(msg, null, 2));
+  console.log("HandleSyncMsg msg: " + JSON.stringify(msg));
   return msg;
 }
