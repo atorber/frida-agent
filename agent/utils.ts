@@ -1,6 +1,4 @@
 /* -----------------base------------------------- */
-
-/* -----------------base------------------------- */
 let retidPtr: any = null
 let retidStruct: any = null
 export const initidStruct = ((str: string | any[]) => {

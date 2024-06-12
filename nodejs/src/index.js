@@ -1,9 +1,9 @@
 const frida = require("frida");
 const fs = require("fs");
 
-const agentSource = fs.readFileSync('../agent/xp-3.9.10.19-lite.js', 'utf8');
+const agentSource = fs.readFileSync('../agent/xp-3.9.10.27-lite.js', 'utf8');
 
-// console.log(agentSource);
+console.log(agentSource);
 
 async function main() {
   const session = await frida.attach('WeChat.exe');
@@ -13,11 +13,11 @@ async function main() {
     console.log('[*] Message:', message);
   });
   await script.load();
-  console.log('[*] Script loaded');
+  console.log('[*] Agent script loaded');
 
   const api = script.exports;
   await api.callFunction('filehelper', 'Hello, world!');
-  console.log('[*] Function called three times');
+  console.log('[*] greet() called on FileHelper');
 
 //   await script.unload();
 //   console.log('[*] Script unloaded');

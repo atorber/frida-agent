@@ -518,10 +518,7 @@ function parseContact(start: any) {
 /*
 获取群列表
 */
-async function roomList(): Promise<string[]> {
-  const roomList = []
-  return roomList
-}
+async function roomList() {}
 
 /*
 解散群
@@ -583,15 +580,7 @@ async function roomQRCode(roomId: string): Promise<string> {
 /*
 获取群成员列表
 */
-async function roomMemberList(roomId: string): Promise<string[]> {
-  try {
-    const roomRawPayload = await this.roomRawPayload(roomId)
-    const memberIdList = roomRawPayload?.memberIdList
-    return memberIdList || []
-  } catch (e) {
-    return []
-  }
-
+async function roomMemberList(roomId: string) {
 }
 
 /*---------------------Room Invitation---------------------*/
@@ -682,28 +671,7 @@ async function tagContactList(
 /*
 获取群成员详情
 */
-async function roomMemberRawPayload(roomId: string, contactId: string) {
-  try {
-    const contact = this.contactStore[contactId]
-    const MemberRawPayload = {
-      avatar: '',
-      id: contactId,
-      inviterId: contactId,   // "wxid_7708837087612",
-      name: contact?.name || 'Unknow',
-      roomAlias: contact?.name || '',
-    }
-    // log.info(MemberRawPayload)
-    return MemberRawPayload
-  } catch (e) {
-    const member = {
-      avatar: '',
-      id: contactId,
-      name: '',
-    }
-    return member
-  }
-
-}
+async function roomMemberRawPayload(roomId: string, contactId: string) {}
 
 /*
 设置群公告

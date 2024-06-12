@@ -3,21 +3,24 @@ import sys
 
 # 读取agent目录下的xp.js文件，获得js代码
 # 使用UTF-8编码打开文件
-agentSource = open("../agent/xp-3.9.10.19-lite.js", "r", encoding="utf-8").read()
+agentSource = open("../agent/xp-3.9.10.27-lite.js", "r", encoding="utf-8").read()
 # print(agentSource)
 
 def on_message(message, data):
     print("[on_message] message:", message, "data:", data)
-    content = message['payload']['content']
-    contactId = message['payload']['fromUser']
-    if content == "ding":
-        print('content is ding:', content)
-        script.post({
-            'type': 'send', 
-            'payload': {
-            'text':'dong',
-            'contactId':contactId,
-        }})
+
+    # 判断message中是否包含payload字段
+    if 'payload' in message:
+        content = message['payload']['content']
+        contactId = message['payload']['fromUser']
+        if content == "ding":
+            print('content is ding:', content)
+            script.post({
+                'type': 'send', 
+                'payload': {
+                'text':'dong',
+                'contactId':contactId,
+            }})
 
 session = frida.attach("WeChat.exe")
 

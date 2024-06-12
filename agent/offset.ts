@@ -1,4 +1,4 @@
-import { doesNotMatch } from "assert"
+// 各版本微信的偏移量
 
 export const wxOffsets_3_9_2_23 = {
   shareRecordMgr: {
