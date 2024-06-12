@@ -11,7 +11,7 @@ const availableVersion = 1661534743 // 3.9.2.23  ==0x63090217
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 const moduleLoad = Module.load('WeChatWin.dll')
-// console.info('moduleBaseAddress:', moduleBaseAddress)
+// console.log('moduleBaseAddress:', moduleBaseAddress)
 
 /* -----------------base------------------------- */
 let retidPtr: any = null
@@ -103,9 +103,9 @@ const readStringPtr = (address: any) => {
     return addr.size ? addr.ptr._readUtf8String(addr.size) : ''
   }
 
-  // console.info('readStringPtr() address:',address,' -> str ptr:', addr.ptr, 'size:', addr.size, 'capacity:', addr.capacity)
-  // console.info('readStringPtr() str:' , addr.readUtf8String())
-  // console.info('readStringPtr() address:', addr,'dump:', addr.readByteArray(24))
+  // console.log('readStringPtr() address:',address,' -> str ptr:', addr.ptr, 'size:', addr.size, 'capacity:', addr.capacity)
+  // console.log('readStringPtr() str:' , addr.readUtf8String())
+  // console.log('readStringPtr() address:', addr,'dump:', addr.readByteArray(24))
 
   return addr
 }
@@ -122,9 +122,9 @@ const readWStringPtr = (address: any) => {
     return addr.size ? addr.ptr._readUtf16String(addr.size * 2) : ''
   }
 
-  // console.info('readWStringPtr() address:',address,' -> ptr:', addr.ptr, 'size:', addr.size, 'capacity:', addr.capacity)
-  // console.info('readWStringPtr() str:' ,  `"${addr.readUtf16String()}"`,'\n',addr.ptr.readByteArray(addr.size*2+2),'\n')
-  // console.info('readWStringPtr() address:', addr,'dump:', addr.readByteArray(16),'\n')
+  // console.log('readWStringPtr() address:',address,' -> ptr:', addr.ptr, 'size:', addr.size, 'capacity:', addr.capacity)
+  // console.log('readWStringPtr() str:' ,  `"${addr.readUtf16String()}"`,'\n',addr.ptr.readByteArray(addr.size*2+2),'\n')
+  // console.log('readWStringPtr() address:', addr,'dump:', addr.readByteArray(16),'\n')
 
   return addr
 }
@@ -197,7 +197,7 @@ const sendMsgNativeFunction = (talkerId: string, content: any) => {
 
   })
 
-  // console.info('----------txtAsm', txtAsm)
+  // console.log('----------txtAsm', txtAsm)
   const nativeativeFunction = new NativeFunction(ptr(txtAsm), 'void', [])
   nativeativeFunction()
 
@@ -223,7 +223,7 @@ const recvMsgNativeCallback = (() => {
           if (msgType > 0) {
 
             const talkerIdPtr = addr.add(0x48).readPointer()
-            // console.info('txt msg',talkerIdPtr.readUtf16String())
+            // console.log('txt msg',talkerIdPtr.readUtf16String())
             const talkerIdLen = addr.add(0x48 + 0x04).readU32() * 2 + 2
 
             const myTalkerIdPtr = Memory.alloc(talkerIdLen)
@@ -232,7 +232,7 @@ const recvMsgNativeCallback = (() => {
             let contentPtr: any = null
             let contentLen = 0
             let myContentPtr: any = null
-            // console.info('msgType', msgType)
+            // console.log('msgType', msgType)
 
             if (msgType === 3) { // pic path
               const thumbPtr = addr.add(0x19c).readPointer()
@@ -246,7 +246,7 @@ const recvMsgNativeCallback = (() => {
                 hdPath, //  PUPPET.types.Image.Artwork
               ]
               const content = JSON.stringify(picData)
-              console.info('pic msg', content)
+              console.log('pic msg', content)
               myContentPtr = Memory.allocUtf16String(content)
             } else {
               contentPtr = addr.add(0x70).readPointer()
@@ -255,10 +255,10 @@ const recvMsgNativeCallback = (() => {
               Memory.copy(myContentPtr, contentPtr, contentLen)
             }
 
-            //  console.info('----------------------------------------')
-            //  console.info(msgType)
-            //  console.info(contentPtr.readUtf16String())
-            //  console.info('----------------------------------------')
+            //  console.log('----------------------------------------')
+            //  console.log(msgType)
+            //  console.log(contentPtr.readUtf16String())
+            //  console.log('----------------------------------------')
             const groupMsgAddr = addr.add(0x174).readU32() //* 2 + 2
             let myGroupMsgSenderIdPtr: any = null
             if (groupMsgAddr === 0) { // weChatPublic is zero，type is 49
@@ -289,12 +289,12 @@ const recvMsgNativeCallback = (() => {
               myXmlContentPtr = Memory.alloc(xmlContentLen)
               Memory.copy(myXmlContentPtr, xmlContentPtr, xmlContentLen)
             }
-            console.info('msgType', msgType)
-            console.info('talkerId', myTalkerIdPtr.readUtf16String())
-            console.info('content', myContentPtr.readUtf16String())
-            console.info('groupMsgSenderId', myGroupMsgSenderIdPtr.readUtf16String())
-            console.info('xmlContent', myXmlContentPtr.readUtf16String())
-            console.info('isMyMsg', isMyMsg)
+            console.log('msgType', msgType)
+            console.log('talkerId', myTalkerIdPtr.readUtf16String())
+            console.log('content', myContentPtr.readUtf16String())
+            console.log('groupMsgSenderId', myGroupMsgSenderIdPtr.readUtf16String())
+            console.log('xmlContent', myXmlContentPtr.readUtf16String())
+            console.log('isMyMsg', isMyMsg)
             setImmediate(() => nativeativeFunction(msgType, myTalkerIdPtr, myContentPtr, myGroupMsgSenderIdPtr, myXmlContentPtr, isMyMsg))
           }
         } catch (e: any) {
@@ -328,7 +328,7 @@ const recvMsgNativeCallbackTest = () => {
           if (msgType > 0) {
 
             const talkerIdPtr = addr.add(0x48).readPointer()
-            // console.info('txt msg',talkerIdPtr.readUtf16String())
+            // console.log('txt msg',talkerIdPtr.readUtf16String())
             const talkerIdLen = addr.add(0x48 + 0x04).readU32() * 2 + 2
 
             const myTalkerIdPtr = Memory.alloc(talkerIdLen)
@@ -337,7 +337,7 @@ const recvMsgNativeCallbackTest = () => {
             let contentPtr: any = null
             let contentLen = 0
             let myContentPtr: any = null
-            // console.info('msgType', msgType)
+            // console.log('msgType', msgType)
 
             if (msgType === 3) { // pic path
               const thumbPtr = addr.add(0x19c).readPointer()
@@ -351,7 +351,7 @@ const recvMsgNativeCallbackTest = () => {
                 hdPath, //  PUPPET.types.Image.Artwork
               ]
               const content = JSON.stringify(picData)
-              console.info('pic msg', content)
+              console.log('pic msg', content)
               myContentPtr = Memory.allocUtf16String(content)
             } else {
               contentPtr = addr.add(0x70).readPointer()
@@ -360,10 +360,10 @@ const recvMsgNativeCallbackTest = () => {
               Memory.copy(myContentPtr, contentPtr, contentLen)
             }
 
-            //  console.info('----------------------------------------')
-            //  console.info(msgType)
-            //  console.info(contentPtr.readUtf16String())
-            //  console.info('----------------------------------------')
+            //  console.log('----------------------------------------')
+            //  console.log(msgType)
+            //  console.log(contentPtr.readUtf16String())
+            //  console.log('----------------------------------------')
             const groupMsgAddr = addr.add(0x174).readU32() //* 2 + 2
             let myGroupMsgSenderIdPtr: any = null
             if (groupMsgAddr === 0) { // weChatPublic is zero，type is 49

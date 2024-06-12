@@ -1,25 +1,24 @@
-// 连接ws服务127.0.0.1:8082，发送消息 hello world
 const WebSocket = require("ws");
-const ws = new WebSocket("ws://127.0.0.1:8082");
-// 连接成功建立时执行的回调函数
-ws.onopen = function() {
-    console.log("已连接到WebSocket服务");
-    // 发送消息
-    ws.send("hello world");
-};
+// 连接到本机服务器8082端口
+const ws = new WebSocket("ws://localhost:8081");
+// 发送消息及接收响应
+ws.on("open", () => {
+  console.log("Connected");
+  // 每3秒发送一条消息到服务器
+  setInterval(() => {
+    ws.send("Hello, Server!");
+    console.log('发送消息: "Hello, Server!"');
+  }, 3000);
+});
 
-// 接收到消息时执行的回调函数
-ws.onmessage = function(event) {
-    console.log("接收到的服务器返回消息: " + event.data);
-};
+ws.on("message", (data) => {
+  console.log("Received:", data);
+});
 
-// 连接发生错误时执行的回调函数
-ws.onerror = function(error) {
-    console.error("WebSocket发生错误: ");
-    console.error(error);
-};
+ws.on("close", () => {
+  console.log("Connection closed");
+});
 
-// 连接关闭时执行的回调函数
-ws.onclose = function() {
-    console.log("WebSocket连接已关闭");
-};
+ws.on("error", (error) => {
+  console.error("Error:", error);
+});

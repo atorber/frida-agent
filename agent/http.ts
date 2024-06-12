@@ -87,24 +87,25 @@ const readAll = async (input: InputStream): Promise<any> => {
 };
 
 // 创建HTTP服务器
-const server = http.createServer((req, res) => {
-    if (req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => {
-            body += chunk.toString();
-        });
-        req.on('end', () => {
-            console.log('HTTP 服务器接收消息:', body);
-            const message = JSON.stringify(JSON.parse(body));
+// const server = http.createServer((req, res) => {
+//     console.log('HTTP 服务器已连接');   
+//     if (req.method === 'POST') {
+//         let body = '';
+//         req.on('data', chunk => {
+//             body += chunk.toString();
+//         });
+//         req.on('end', () => {
+//             console.log('HTTP 服务器接收消息:', body);
+//             const message = JSON.stringify(JSON.parse(body));
 
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(message);
-        });
-    } else {
-        res.writeHead(405, { 'Content-Type': 'text/plain' });
-        res.end('Method Not Allowed');
-    }
-});
+//             res.writeHead(200, { 'Content-Type': 'application/json' });
+//             res.end(message);
+//         });
+//     } else {
+//         res.writeHead(405, { 'Content-Type': 'text/plain' });
+//         res.end('Method Not Allowed');
+//     }
+// });
 
 // server.listen(8081, '127.0.0.1', () => {
 //     console.log('HTTP 服务器正在监听 127.0.0.1:8081');
@@ -113,42 +114,43 @@ const server = http.createServer((req, res) => {
 // });
 
 if (true) {
-    Socket.listen({
-        family: 'ipv4',
-        port: 8082,
-    }).then((server) => {
-        console.log('Frida IPC 服务器正在监听 127.0.0.1:8082');
-        console.log('Frida IPC 服务器正在等待连接', JSON.stringify(server));
-        server.accept().then(async (client) => {
-            console.log('Frida IPC 服务器接收到连接');
+    // Socket.listen({
+    //     family: 'ipv4',
+    //     port: 8082,
+    // }).then((server) => {
+    //     console.log('Frida IPC 服务器正在监听 127.0.0.1:8082');
+    //     console.log('Frida IPC 服务器正在等待连接', JSON.stringify(server));
+    //     server.accept().then(async (client) => {
+    //         console.log('Frida IPC 服务器接收到连接');
 
-            readAll(client.input).then((data) => {
-                console.log('Frida IPC 服务器接收消息2:', data);
-                // 发送消息
-                const message = JSON.stringify(JSON.parse(data));
-                console.log('Frida IPC 服务器发送消息3:', message);
-                const dataRes = stringToUint8Array(message);
-                // console.log('Frida IPC 服务器发送消息3:', dataRes);
+    //         readAll(client.input).then((data) => {
+    //             console.log('Frida IPC 服务器接收消息2:', data);
+    //             // 发送消息
+    //             const message = JSON.stringify(JSON.parse(data));
+    //             console.log('Frida IPC 服务器发送消息3:', message);
+    //             const dataRes = stringToUint8Array(message);
+    //             // console.log('Frida IPC 服务器发送消息3:', dataRes);
 
-                client.output.write(dataRes as any);
+    //             client.output.write(dataRes as any);
 
-            }).catch((reason) => {
-                console.error('Failed to read:', reason);
-            });
+    //         }).catch((reason) => {
+    //             console.error('Failed to read:', reason);
+    //         });
 
-        }).catch((reason) => {
-            console.error('Failed to accept:', reason)
-        });
-    }).catch((reason) => {
-        console.error('Failed to listen:', reason);
-    });
+    //     }).catch((reason) => {
+    //         console.error('Failed to accept:', reason)
+    //     });
+    // }).catch((reason) => {
+    //     console.error('Failed to listen:', reason);
+    // });
 
     // 客户端
     Socket.connect({
         family: 'ipv4',
         host: '127.0.0.1',
-        port: 8082,
+        port: 8081,
     }).then((client) => {
+
         console.log('Frida IPC 客户端连接成功');
 
         // 发送消息
@@ -171,5 +173,4 @@ if (true) {
     }).catch((reason) => {
         console.error('Failed to connect:', reason);
     });
-
 }

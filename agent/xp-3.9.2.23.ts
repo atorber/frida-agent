@@ -31,7 +31,7 @@ const availableVersion = 1661534743 // 3.9.2.23  ==0x63090217
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 const moduleLoad = Module.load('WeChatWin.dll')
-// console.info('moduleBaseAddress:', moduleBaseAddress)
+// console.log('moduleBaseAddress:', moduleBaseAddress)
 
 /* -----------------base------------------------- */
 let retidPtr: any = null
@@ -123,9 +123,9 @@ const readStringPtr = (address: any) => {
     return addr.size ? addr.ptr._readUtf8String(addr.size) : ''
   }
 
-  // console.info('readStringPtr() address:',address,' -> str ptr:', addr.ptr, 'size:', addr.size, 'capacity:', addr.capacity)
-  // console.info('readStringPtr() str:' , addr.readUtf8String())
-  // console.info('readStringPtr() address:', addr,'dump:', addr.readByteArray(24))
+  // console.log('readStringPtr() address:',address,' -> str ptr:', addr.ptr, 'size:', addr.size, 'capacity:', addr.capacity)
+  // console.log('readStringPtr() str:' , addr.readUtf8String())
+  // console.log('readStringPtr() address:', addr,'dump:', addr.readByteArray(24))
 
   return addr
 }
@@ -142,9 +142,9 @@ const readWStringPtr = (address: any) => {
     return addr.size ? addr.ptr._readUtf16String(addr.size * 2) : ''
   }
 
-  // console.info('readWStringPtr() address:',address,' -> ptr:', addr.ptr, 'size:', addr.size, 'capacity:', addr.capacity)
-  // console.info('readWStringPtr() str:' ,  `"${addr.readUtf16String()}"`,'\n',addr.ptr.readByteArray(addr.size*2+2),'\n')
-  // console.info('readWStringPtr() address:', addr,'dump:', addr.readByteArray(16),'\n')
+  // console.log('readWStringPtr() address:',address,' -> ptr:', addr.ptr, 'size:', addr.size, 'capacity:', addr.capacity)
+  // console.log('readWStringPtr() str:' ,  `"${addr.readUtf16String()}"`,'\n',addr.ptr.readByteArray(addr.size*2+2),'\n')
+  // console.log('readWStringPtr() address:', addr,'dump:', addr.readByteArray(16),'\n')
 
   return addr
 }
@@ -164,7 +164,7 @@ const getWechatVersionFunction = () => {
   const pattern = '55 8B ?? 83 ?? ?? A1 ?? ?? ?? ?? 83 ?? ?? 85 ?? 7F ?? 8D ?? ?? E8 ?? ?? ?? ?? 84 ?? 74 ?? 8B ?? ?? ?? 85 ?? 75 ?? E8 ?? ?? ?? ?? 0F ?? ?? 0D ?? ?? ?? ?? A3 ?? ?? ?? ?? A3 ?? ?? ?? ?? 8B ?? 5D C3'
   // 扫描内存，查找版本号
   const results: any = Memory.scanSync(moduleLoad.base, moduleLoad.size, pattern)
-  console.info('getWechatVersionFunction results:', JSON.stringify(results, null, 2))
+  console.log('getWechatVersionFunction results:', JSON.stringify(results, null, 2))
   if (results.length === 0) {
     return 0
   }
@@ -188,7 +188,7 @@ const getWechatVersionStringFunction = () => {
   return vers.join('.')
 }
 
-console.info('WeChat Version:', getWechatVersionStringFunction())
+console.log('WeChat Version:', getWechatVersionStringFunction())
 
 // 检查微信版本是否支持
 const checkSupportedFunction = () => {
@@ -214,7 +214,7 @@ const checkLogin = () => {
   return success;
 }
 
-console.info('checkLogin:', checkLogin())
+console.log('checkLogin:', checkLogin())
 
 // 检查是否已登录
 const isLoggedInFunction = () => {
@@ -222,7 +222,7 @@ const isLoggedInFunction = () => {
   const accout_service_addr = moduleBaseAddress.add(wxOffsets.login.WX_ACCOUNT_SERVICE_OFFSET)
   const callFunction = new NativeFunction(accout_service_addr, 'pointer', [])
   const service_addr = callFunction()
-  // console.info('service_addr:', service_addr)
+  // console.log('service_addr:', service_addr)
 
   try {
     if (!service_addr.isNull()) {
@@ -232,7 +232,7 @@ const isLoggedInFunction = () => {
   } catch (e: any) {
     throw new Error(e)
   }
-  // console.info('isLoggedInFunction结果:', success)
+  // console.log('isLoggedInFunction结果:', success)
   return success
 }
 
@@ -242,10 +242,10 @@ const hookLoginEventCallback = (() => {
   const nativeativeFunction = new NativeFunction(nativeCallback, 'void', [])
   Interceptor.attach(moduleBaseAddress.add(wxOffsets.login.WX_ACCOUNT_SERVICE_OFFSET), {
     onLeave: function (retval) {
-      // console.info('hookLoginEventCallback:', retval)
+      // console.log('hookLoginEventCallback:', retval)
       const isLoggedIn = isLoggedInFunction()
       if (isLoggedIn !== 1) {
-        console.info('当前登陆状态:', isLoggedIn)
+        console.log('当前登陆状态:', isLoggedIn)
         setImmediate(() => nativeativeFunction())
       }
       return retval
@@ -254,7 +254,7 @@ const hookLoginEventCallback = (() => {
 
   const checkLoginStatus = () => {
     const isLoggedIn = isLoggedInFunction()
-    // console.info('当前登陆状态:', isLoggedIn);
+    // console.log('当前登陆状态:', isLoggedIn);
     if (isLoggedIn !== 1) {
       setImmediate(() => nativeativeFunction())
       setTimeout(checkLoginStatus, 3000)  // 每3秒检查一次，直到登陆成功
@@ -277,7 +277,7 @@ const hookLogoutEventCallback = (() => {
     Interceptor.attach(moduleBaseAddress.add(wxOffsets.login.WX_LOGOUT_OFFSET), {
       onEnter: function (args: any) {
         try {
-          console.info('已登出:', args[0].toInt32())
+          console.log('已登出:', args[0].toInt32())
           const bySrv = args[0].toInt32()
           setImmediate(() => nativeativeFunction(bySrv))
         } catch (e: any) {
@@ -322,7 +322,7 @@ const agentReadyCallback = (() => {
   const nativeativeFunction = new NativeFunction(nativeCallback, 'void', [])
   const checkLoginStatus = () => {
     const isLoggedIn = isLoggedInFunction()
-    // console.info('当前登陆状态:', isLoggedIn);
+    // console.log('当前登陆状态:', isLoggedIn);
     // 如果已经登陆则执行回调
     if (isLoggedIn === 1) {
       if (!isReady) {
@@ -378,12 +378,12 @@ const getMyselfInfoFunction = () => {
     head_img_url,
   }
   const myselfJson = JSON.stringify(myself)
-  // console.info('myselfJson:', myselfJson)
+  // console.log('myselfJson:', myselfJson)
   return myselfJson
 
 }
 
-console.info('getMyselfInfoFunction:', getMyselfInfoFunction())
+console.log('getMyselfInfoFunction:', getMyselfInfoFunction())
 
 class SelfInfoInner {
   wxid!: string
@@ -403,11 +403,11 @@ class SelfInfoInner {
 // 获取联系人列表
 const getContactNativeFunction = (): string => {
   // 基地址和偏移量需要根据目标程序实际情况调整
-  // console.info('moduleBaseAddress:', moduleBaseAddress)
+  // console.log('moduleBaseAddress:', moduleBaseAddress)
   const getInstanceAddr = moduleBaseAddress.add(
     wxOffsets.contactMgr.WX_CONTACT_MGR_OFFSET,
   );
-  // console.info('getInstanceAddr:', getInstanceAddr)
+  // console.log('getInstanceAddr:', getInstanceAddr)
   const contactGetListAddr = moduleBaseAddress.add(
     wxOffsets.contact.WX_CONTACT_GET_LIST_OFFSET,
   );
@@ -426,16 +426,16 @@ const getContactNativeFunction = (): string => {
       // 模拟 C++ 中的内联汇编操作
       cw.putPushfx();
       cw.putPushax();
-      // console.info('call getInstanceAddr:', getInstanceAddr)
+      // console.log('call getInstanceAddr:', getInstanceAddr)
       cw.putCallAddress(getInstanceAddr);
-      // console.info('called getInstanceAddr:', getInstanceAddr)
+      // console.log('called getInstanceAddr:', getInstanceAddr)
       cw.putMovRegAddress('ecx', contactPtr);
-      // console.info('putLeaRegAddress:', contactPtr)
+      // console.log('putLeaRegAddress:', contactPtr)
 
       cw.putPushReg('ecx');
-      // console.info('putPushReg:', 'ecx')
+      // console.log('putPushReg:', 'ecx')
       cw.putMovRegReg('ecx', 'eax');
-      // console.info('call contactGetListAddr:', contactGetListAddr)
+      // console.log('call contactGetListAddr:', contactGetListAddr)
       cw.putCallAddress(contactGetListAddr);
       cw.putXorRegReg('eax', 'eax'); // 将 EAX 寄存器清零
       cw.putMovRegReg('ecx', 'eax');
@@ -456,7 +456,7 @@ const getContactNativeFunction = (): string => {
   try {
     const nativeFunction = new NativeFunction(asmCode, 'int', []);
     success = nativeFunction();
-    // console.info('success:', success)
+    // console.log('success:', success)
   } catch (e) {
     console.error('Error during function execution:', e);
     return '';
@@ -482,7 +482,7 @@ const getContactNativeFunction = (): string => {
       };
 
       // if(contact.alias){
-      //   console.info('contact:', JSON.stringify(contact))
+      //   console.log('contact:', JSON.stringify(contact))
       // }
 
       if (contact.name) {
@@ -491,9 +491,9 @@ const getContactNativeFunction = (): string => {
       start = start.add(CONTACT_SIZE);
     }
   }
-  // console.info('contacts size:', contacts.length)
+  // console.log('contacts size:', contacts.length)
   const contactsString = JSON.stringify(contacts)
-  // console.info('contacts:', contactsString)
+  // console.log('contacts:', contactsString)
   return contactsString;
 };
 
@@ -542,11 +542,11 @@ const modifyContactRemarkFunction = (contactId: string, text: string) => {
 
   })
 
-  // console.info('----------txtAsm', txtAsm)
+  // console.log('----------txtAsm', txtAsm)
   const nativeativeFunction = new NativeFunction(ptr(txtAsm), 'void', [])
   try {
     nativeativeFunction()
-    console.info('[设置联系人备注] successPtr:', successPtr.readS32())
+    console.log('[设置联系人备注] successPtr:', successPtr.readS32())
   } catch (e) {
     console.error('[设置联系人备注]Error:', e)
   }
@@ -609,10 +609,10 @@ const getHeadImage = (contactId: string, url: string) => {
 
   })
 
-  // console.info('----------txtAsm', txtAsm)
+  // console.log('----------txtAsm', txtAsm)
   const nativeativeFunction = new NativeFunction(ptr(txtAsm), 'void', [])
   const head_img = nativeativeFunction()
-  console.info('head_img:', head_img)
+  console.log('head_img:', head_img)
   return head_img
 }
 
@@ -701,7 +701,7 @@ const addFriendByWxid = (contactId: string, text: string) => {
 
   })
 
-  // console.info('----------txtAsm', txtAsm)
+  // console.log('----------txtAsm', txtAsm)
   const nativeativeFunction = new NativeFunction(ptr(txtAsm), 'int', [])
   try {
     success = nativeativeFunction()
@@ -738,7 +738,7 @@ const getChatroomMemberInfoFunction = () => {
     chatroomNodeList.push(node)
     const roomid = readWideString(node.add(0x10))
     // try{
-    //   console.info('获取群信息...', roomid)
+    //   console.log('获取群信息...', roomid)
     //   GetMemberFromChatRoom(roomid)
     // }catch(e){
     //   console.error('获取群信息失败：', e)
@@ -748,7 +748,7 @@ const getChatroomMemberInfoFunction = () => {
       const memberStr: any = readString(node.add(0x44))
       if (memberStr.length > 0) {
         const admin = readWideString(node.add(0x74))
-        // console.info('获取到的admin', admin)
+        // console.log('获取到的admin', admin)
         const memberList = memberStr.split(/[\\^][G]/)
         chatroomMemberList.push({ roomid, roomMember: memberList, admin })
       }
@@ -772,9 +772,9 @@ const getChatroomMemberInfoFunction = () => {
   let results = '[]'
   try {
     results = JSON.stringify(chatroomMemberList)
-    // console.info('群组列表：', results)
+    // console.log('群组列表：', results)
   } catch (e) {
-    console.info('格式转换错误：', 'e')
+    console.log('格式转换错误：', 'e')
   }
   return results
 }
@@ -785,16 +785,16 @@ let nickRoomId: any = null
 let nickMemberId: any = null
 let nickBuff: any = null
 const getChatroomMemberNickInfoFunction = ((memberId: any, roomId: any) => {
-  // console.info('Function called with wxid:', memberId, 'chatRoomId:', roomId);
+  // console.log('Function called with wxid:', memberId, 'chatRoomId:', roomId);
   nickBuff = Memory.alloc(0x7e4)
   //const nickRetAddr = Memory.alloc(0x04)
   memberNickBuffAsm = Memory.alloc(Process.pageSize)
-  //console.info('asm address----------',memberNickBuffAsm)
+  //console.log('asm address----------',memberNickBuffAsm)
   nickRoomId = initidStruct(roomId)
-  //console.info('nick room id',nickRoomId)
+  //console.log('nick room id',nickRoomId)
   nickMemberId = initidStruct(memberId)
 
-  //console.info('nick nickMemberId id',nickMemberId)
+  //console.log('nick nickMemberId id',nickMemberId)
   //const nickStructPtr = initmsgStruct('')
 
   Memory.patchCode(memberNickBuffAsm, Process.pageSize, code => {
@@ -809,7 +809,7 @@ const getChatroomMemberNickInfoFunction = ((memberId: any, roomId: any) => {
     cw.putMovRegReg('edx', 'edi')
     cw.putPushReg('eax')
     cw.putMovRegAddress('ecx', nickMemberId)
-    // console.info('moduleBaseAddress', moduleBaseAddress)
+    // console.log('moduleBaseAddress', moduleBaseAddress)
     cw.putCallAddress(moduleBaseAddress.add(0xC06F10))
     cw.putAddRegImm('esp', 0x04)
 
@@ -823,7 +823,7 @@ const getChatroomMemberNickInfoFunction = ((memberId: any, roomId: any) => {
   const nativeativeFunction = new NativeFunction(ptr(memberNickBuffAsm), 'void', [])
   nativeativeFunction()
   const nickname = readWideString(nickBuff)
-  // console.info('--------------------------nickname', nickname)
+  // console.log('--------------------------nickname', nickname)
   return nickname
 })
 // getChatroomMemberNickInfoFunction('xxx', 'xxx@chatroom')
@@ -851,40 +851,40 @@ const delMemberFromChatRoom = (chat_room_id: string, wxids: string[]) => {
     writer.putPushfx();
     writer.putPushax();
 
-    console.info('get_chat_room_mgr_addr:', get_chat_room_mgr_addr)
+    console.log('get_chat_room_mgr_addr:', get_chat_room_mgr_addr)
     writer.putCallAddress(get_chat_room_mgr_addr);
     writer.putSubRegImm('esp', 0x14);
     writer.putMovRegReg('esi', 'eax');
     // writer.putMovRegReg('ecx', 'esp');
-    console.info('chat_room:', chatRoomPtr)
+    console.log('chat_room:', chatRoomPtr)
     writer.putMovRegAddress('ecx', chatRoomPtr);
     writer.putPushReg('ecx');
 
-    console.info('init_chat_msg_addr:', init_chat_msg_addr)
+    console.log('init_chat_msg_addr:', init_chat_msg_addr)
     writer.putCallAddress(init_chat_msg_addr);
     writer.putMovRegReg('ecx', 'esi');
 
-    console.info('membersBuffer:', membersBuffer)
+    console.log('membersBuffer:', membersBuffer)
     writer.putMovRegAddress('eax', membersBuffer);
     writer.putPushReg('eax');
-    console.info('del_member_addr:', del_member_addr)
+    console.log('del_member_addr:', del_member_addr)
     writer.putCallAddress(del_member_addr);
 
-    console.info('putPopax:', 'putPopax')
+    console.log('putPopax:', 'putPopax')
     writer.putPopax();
     writer.putPopfx();
 
     writer.putRet()
     writer.flush();
-    console.info('writer.flush();')
+    console.log('writer.flush();')
   })
 
-  console.info('----------txtAsm', txtAsm)
+  console.log('----------txtAsm', txtAsm)
   // 调用刚才写入的汇编代码
   const nativeFunction = new NativeFunction(ptr(txtAsm), 'int', []);
   try {
     success = nativeFunction();
-    console.info('[踢出群聊]delMemberFromChatRoom success:', success);
+    console.log('[踢出群聊]delMemberFromChatRoom success:', success);
     return success;
   } catch (e) {
     console.error('[踢出群聊]Error during delMemberFromChatRoom nativeFunction function execution:', e);
@@ -942,7 +942,7 @@ const addMemberToChatRoom = (chat_room_id: string, wxids: any[]) => {
   const nativeFunction = new NativeFunction(ptr(txtAsm), 'void', []);
   try {
     const success = nativeFunction();
-    console.info('success:', success);
+    console.log('success:', success);
     return success;
   } catch (e) {
     console.error('[添加群成员]Error during addMemberToChatRoom nativeFunction function execution:', e);
@@ -954,7 +954,7 @@ const addMemberToChatRoom = (chat_room_id: string, wxids: any[]) => {
 
 // 未完成，邀请群成员
 const inviteMemberToChatRoom = (chat_room_id: string, wxids: any[]) => {
-  console.info('chat_room_id:', chat_room_id, 'wxids:', wxids);
+  console.log('chat_room_id:', chat_room_id, 'wxids:', wxids);
   const base_addr = moduleBaseAddress; // 假设基础地址已经定义好
   const chat_room = Memory.allocUtf16String(chat_room_id);
   const members = wxids.map((id: string) => Memory.allocUtf16String(id));
@@ -1089,7 +1089,7 @@ const sendMsgNativeFunction = (talkerId: any, content: any) => {
 
   })
 
-  // console.info('----------txtAsm', txtAsm)
+  // console.log('----------txtAsm', txtAsm)
   const nativeativeFunction = new NativeFunction(ptr(txtAsm), 'void', [])
   nativeativeFunction()
 
@@ -1100,10 +1100,10 @@ let asmAtMsg: any = null
 let roomid_: NativePointerValue, msg_: NativePointerValue, wxid_, atid_: NativePointerValue
 let ecxBuffer: NativePointerValue
 const sendAtMsgNativeFunction = ((roomId: any, text: string | string[], contactId: any, nickname: string) => {
-  // console.info('Function called with roomId:', roomId, 'text:', text, 'contactId:', contactId, 'nickname:', nickname)
+  // console.log('Function called with roomId:', roomId, 'text:', text, 'contactId:', contactId, 'nickname:', nickname)
   asmAtMsg = Memory.alloc(Process.pageSize)
   ecxBuffer = Memory.alloc(0x3b0)
-  // console.info('xxxx', text.indexOf('@'+nickname))
+  // console.log('xxxx', text.indexOf('@'+nickname))
   const atContent = text.indexOf('@' + nickname) !== -1 ? text : ('@' + nickname + ' ' + text)
 
   roomid_ = initStruct(roomId)
@@ -1146,7 +1146,7 @@ const sendAtMsgNativeFunction = ((roomId: any, text: string | string[], contactI
 
   })
 
-  //console.info('----------txtAsm', asmAtMsg)
+  //console.log('----------txtAsm', asmAtMsg)
   const nativeativeFunction = new NativeFunction(ptr(asmAtMsg), 'void', [])
   nativeativeFunction()
 
@@ -1218,7 +1218,7 @@ const sendPicMsgNativeFunction = (contactId: string, path: string) => {
 
   })
 
-  // console.info('----------picAsm',picAsm)
+  // console.log('----------picAsm',picAsm)
   const nativeativeFunction = new NativeFunction(ptr(picAsm), 'void', [])
   nativeativeFunction()
 
@@ -1226,7 +1226,7 @@ const sendPicMsgNativeFunction = (contactId: string, path: string) => {
 
 // 发送link消息——未完成
 function sendLinkMsgNativeFunction(wxid: string, title: string, url: string, thumburl: string, senderId: string, senderName: string, digest: string) {
-  console.info('Function called with wxid:', wxid, 'title:', title, 'url:', url, 'thumburl:', thumburl, 'senderId:', senderId, 'senderName:', senderName, 'digest:', digest);
+  console.log('Function called with wxid:', wxid, 'title:', title, 'url:', url, 'thumburl:', thumburl, 'senderId:', senderId, 'senderName:', senderName, 'digest:', digest);
   let success = -1;
 
   // 假设已经有了这些函数和基地址的相对偏移量
@@ -1299,7 +1299,7 @@ const recvMsgNativeCallback = (() => {
           if (msgType > 0) {
 
             const talkerIdPtr = addr.add(0x48).readPointer()
-            // console.info('txt msg',talkerIdPtr.readUtf16String())
+            // console.log('txt msg',talkerIdPtr.readUtf16String())
             const talkerIdLen = addr.add(0x48 + 0x04).readU32() * 2 + 2
 
             const myTalkerIdPtr = Memory.alloc(talkerIdLen)
@@ -1308,7 +1308,7 @@ const recvMsgNativeCallback = (() => {
             let contentPtr: any = null
             let contentLen = 0
             let myContentPtr: any = null
-            // console.info('msgType', msgType)
+            // console.log('msgType', msgType)
 
             if (msgType === 3) { // pic path
               const thumbPtr = addr.add(0x19c).readPointer()
@@ -1322,7 +1322,7 @@ const recvMsgNativeCallback = (() => {
                 hdPath, //  PUPPET.types.Image.Artwork
               ]
               const content = JSON.stringify(picData)
-              console.info('pic msg', content)
+              console.log('pic msg', content)
               myContentPtr = Memory.allocUtf16String(content)
             } else {
               contentPtr = addr.add(0x70).readPointer()
@@ -1331,10 +1331,10 @@ const recvMsgNativeCallback = (() => {
               Memory.copy(myContentPtr, contentPtr, contentLen)
             }
 
-            //  console.info('----------------------------------------')
-            //  console.info(msgType)
-            //  console.info(contentPtr.readUtf16String())
-            //  console.info('----------------------------------------')
+            //  console.log('----------------------------------------')
+            //  console.log(msgType)
+            //  console.log(contentPtr.readUtf16String())
+            //  console.log('----------------------------------------')
             const groupMsgAddr = addr.add(0x174).readU32() //* 2 + 2
             let myGroupMsgSenderIdPtr: any = null
             if (groupMsgAddr === 0) { // weChatPublic is zero，type is 49
@@ -1365,12 +1365,12 @@ const recvMsgNativeCallback = (() => {
               myXmlContentPtr = Memory.alloc(xmlContentLen)
               Memory.copy(myXmlContentPtr, xmlContentPtr, xmlContentLen)
             }
-            console.info('msgType', msgType)
-            console.info('talkerId', myTalkerIdPtr.readUtf16String())
-            console.info('content', myContentPtr.readUtf16String())
-            console.info('groupMsgSenderId', myGroupMsgSenderIdPtr.readUtf16String())
-            console.info('xmlContent', myXmlContentPtr.readUtf16String())
-            console.info('isMyMsg', isMyMsg)
+            console.log('msgType', msgType)
+            console.log('talkerId', myTalkerIdPtr.readUtf16String())
+            console.log('content', myContentPtr.readUtf16String())
+            console.log('groupMsgSenderId', myGroupMsgSenderIdPtr.readUtf16String())
+            console.log('xmlContent', myXmlContentPtr.readUtf16String())
+            console.log('isMyMsg', isMyMsg)
             setImmediate(() => nativeativeFunction(msgType, myTalkerIdPtr, myContentPtr, myGroupMsgSenderIdPtr, myXmlContentPtr, isMyMsg))
           }
         } catch (e: any) {
@@ -1404,7 +1404,7 @@ const recvMsgNativeCallbackTest = () => {
           if (msgType > 0) {
 
             const talkerIdPtr = addr.add(0x48).readPointer()
-            // console.info('txt msg',talkerIdPtr.readUtf16String())
+            // console.log('txt msg',talkerIdPtr.readUtf16String())
             const talkerIdLen = addr.add(0x48 + 0x04).readU32() * 2 + 2
 
             const myTalkerIdPtr = Memory.alloc(talkerIdLen)
@@ -1413,7 +1413,7 @@ const recvMsgNativeCallbackTest = () => {
             let contentPtr: any = null
             let contentLen = 0
             let myContentPtr: any = null
-            // console.info('msgType', msgType)
+            // console.log('msgType', msgType)
 
             if (msgType === 3) { // pic path
               const thumbPtr = addr.add(0x19c).readPointer()
@@ -1427,7 +1427,7 @@ const recvMsgNativeCallbackTest = () => {
                 hdPath, //  PUPPET.types.Image.Artwork
               ]
               const content = JSON.stringify(picData)
-              console.info('pic msg', content)
+              console.log('pic msg', content)
               myContentPtr = Memory.allocUtf16String(content)
             } else {
               contentPtr = addr.add(0x70).readPointer()
@@ -1436,10 +1436,10 @@ const recvMsgNativeCallbackTest = () => {
               Memory.copy(myContentPtr, contentPtr, contentLen)
             }
 
-            //  console.info('----------------------------------------')
-            //  console.info(msgType)
-            //  console.info(contentPtr.readUtf16String())
-            //  console.info('----------------------------------------')
+            //  console.log('----------------------------------------')
+            //  console.log(msgType)
+            //  console.log(contentPtr.readUtf16String())
+            //  console.log('----------------------------------------')
             const groupMsgAddr = addr.add(0x174).readU32() //* 2 + 2
             let myGroupMsgSenderIdPtr: any = null
             if (groupMsgAddr === 0) { // weChatPublic is zero，type is 49
@@ -1489,4 +1489,4 @@ const recvMsgNativeCallbackTest = () => {
 
 recvMsgNativeCallbackTest()
 
-// console.info('Process.enumerateThreads():', JSON.stringify(Process.enumerateThreads(), null, 2))
+// console.log('Process.enumerateThreads():', JSON.stringify(Process.enumerateThreads(), null, 2))

@@ -11,7 +11,7 @@
 
 const moduleBaseAddress = Module.getBaseAddress("WeChatWin.dll");
 const moduleLoad = Module.load("WeChatWin.dll");
-// console.info(moduleBaseAddress);
+// console.log(moduleBaseAddress);
 
 const hookAddr = moduleBaseAddress.add(0x23d6f50);
 

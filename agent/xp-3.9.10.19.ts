@@ -15,7 +15,7 @@ const availableVersion = 1661534743 // 3.9.2.23  ==0x63090217
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 const moduleLoad = Module.load('WeChatWin.dll')
-// console.info('moduleBaseAddress:', moduleBaseAddress)
+// console.log('moduleBaseAddress:', moduleBaseAddress)
 
 /* -----------------base------------------------- */
 let retidPtr: any = null
@@ -107,9 +107,9 @@ const readStringPtr = (address: any) => {
     return addr.size ? addr.ptr._readUtf8String(addr.size) : ''
   }
 
-  // console.info('readStringPtr() address:',address,' -> str ptr:', addr.ptr, 'size:', addr.size, 'capacity:', addr.capacity)
-  // console.info('readStringPtr() str:' , addr.readUtf8String())
-  // console.info('readStringPtr() address:', addr,'dump:', addr.readByteArray(24))
+  // console.log('readStringPtr() address:',address,' -> str ptr:', addr.ptr, 'size:', addr.size, 'capacity:', addr.capacity)
+  // console.log('readStringPtr() str:' , addr.readUtf8String())
+  // console.log('readStringPtr() address:', addr,'dump:', addr.readByteArray(24))
 
   return addr
 }
@@ -129,7 +129,7 @@ const readWStringPtr1 = (address: any) => {
   return addr
 }
 
-const writeWStringPtr = (str:string) => {
+const writeWStringPtr = (str: string) => {
   console.log(`输入字符串内容: ${str}`);
   const strLength = str.length;
   // console.log(`字符串长度: ${strLength}`);
@@ -139,15 +139,15 @@ const writeWStringPtr = (str:string) => {
 
   // 计算我们需要为字符串对象结构分配的总内存空间，结构包含：指针 (Process.pointerSize) + 长度 (4 bytes) + 容量 (4 bytes)
   const structureSize = Process.pointerSize + 4 + 4;
-  
+
   // 为字符串数据和结构体分配连续的内存空间
   const totalSize = utf16Length + 2 + structureSize; // +2 用于 null 终止符
   const basePointer = Memory.alloc(totalSize);
-  
+
   // 将结构体指针定位到分配的内存起始位置
   const structurePointer = basePointer;
   // console.log(`字符串分配空间内存指针: ${structurePointer}`);
-  
+
   // 将字符串数据指针定位到结构体之后的位置
   const stringDataPointer = basePointer.add(structureSize);
   // console.log(`字符串保存地址指针: ${stringDataPointer}`);
@@ -178,7 +178,7 @@ const writeWStringPtr = (str:string) => {
   // console.log(`写入字符地址再次确认: ${structurePointer.readPointer()}`);
   // console.log(`读取32位测试: ${structurePointer.readPointer().readS32()}`);
   // console.log(`return写入字符串结构体: ${structurePointer}`);
-  
+
   // 返回分配的结构体表面的起始地址
   return structurePointer;
 };
@@ -258,7 +258,7 @@ const checkLogin = () => {
   return success;
 }
 
-// console.info(new Date().toUTCString() + ' checkLogin:', checkLogin())
+// console.log(new Date().toUTCString() + ' checkLogin:', checkLogin())
 
 // 检查是否已登录
 const isLoggedInFunction = () => {
@@ -266,7 +266,7 @@ const isLoggedInFunction = () => {
   const accout_service_addr = moduleBaseAddress.add(wxOffsets.kGetAccountServiceMgr)
   const callFunction = new NativeFunction(accout_service_addr, 'pointer', [])
   const service_addr = callFunction()
-  // console.info('service_addr:', service_addr)
+  // console.log('service_addr:', service_addr)
 
   try {
     if (!service_addr.isNull()) {
@@ -276,7 +276,7 @@ const isLoggedInFunction = () => {
   } catch (e: any) {
     throw new Error(e)
   }
-  // console.info('isLoggedInFunction结果:', success)
+  // console.log('isLoggedInFunction结果:', success)
   return success
 }
 
@@ -286,10 +286,10 @@ const hookLoginEventCallback = (() => {
   const nativeativeFunction = new NativeFunction(nativeCallback, 'void', [])
   Interceptor.attach(moduleBaseAddress.add(wxOffsets.kGetAccountServiceMgr), {
     onLeave: function (retval) {
-      // console.info('hookLoginEventCallback:', retval)
+      // console.log('hookLoginEventCallback:', retval)
       const isLoggedIn = isLoggedInFunction()
       if (isLoggedIn !== 1) {
-        // console.info('当前登陆状态:', isLoggedIn)
+        // console.log('当前登陆状态:', isLoggedIn)
         setImmediate(() => nativeativeFunction())
       }
       return retval
@@ -298,7 +298,7 @@ const hookLoginEventCallback = (() => {
 
   const checkLoginStatus = () => {
     const isLoggedIn = isLoggedInFunction()
-    // console.info('当前登陆状态:', isLoggedIn);
+    // console.log('当前登陆状态:', isLoggedIn);
     if (isLoggedIn !== 1) {
       setImmediate(() => nativeativeFunction())
       setTimeout(checkLoginStatus, 3000)  // 每3秒检查一次，直到登陆成功
@@ -506,7 +506,7 @@ const getMyselfInfoFunction = () => {
 
   }
 
-  // console.info('out:', JSON.stringify(out, null, 2))
+  // console.log('out:', JSON.stringify(out, null, 2))
 
   const myself = {
     id: out.wxid,
@@ -515,12 +515,12 @@ const getMyselfInfoFunction = () => {
     head_img_url: out.head_img,
   }
   const myselfJson = JSON.stringify(myself, null, 2)
-  // console.info('myselfJson:', myselfJson)
+  // console.log('myselfJson:', myselfJson)
   return myselfJson
 
 }
 
-// console.info('getMyselfInfoFunction:', getMyselfInfoFunction())
+// console.log('getMyselfInfoFunction:', getMyselfInfoFunction())
 
 // 原始实现
 function GetSelfInfo() {
@@ -555,7 +555,7 @@ function GetSelfInfo() {
   // 使用辅助函数来模版处理字符串读取
   if (!serviceAddr.isNull()) {
     out.wxid = ReadWeChatStr(serviceAddr.add(0x80));
-    console.info('out.wxid:', out.wxid)
+    console.log('out.wxid:', out.wxid)
     out.account = readWeChatString(serviceAddr, 0x108);
     out.mobile = readWeChatString(serviceAddr, 0x128);
     out.signature = readWeChatString(serviceAddr, 0x148);
@@ -728,16 +728,16 @@ const sendMsgNativeFunction = (talkerId: any, content: any) => {
   // const to_user = Memory.alloc(wxid.length * 2 + 2)
   // to_user.writeUtf16String(wxid)
   // to_user = new WeChatString(wxid).getMemoryAddress();
-  // console.info('wxid:', wxid)
+  // console.log('wxid:', wxid)
   to_user = writeWStringPtr(talkerId);
-  console.info('to_user wxid :', readWStringPtr(to_user).readUtf16String());
+  console.log('to_user wxid :', readWStringPtr(to_user).readUtf16String());
 
   // const text_msg = Memory.alloc(msg.length * 2 + 2)
   // text_msg.writeUtf16String(msg)
   // text_msg = new WeChatString(msg).getMemoryAddress();
 
   text_msg = writeWStringPtr(content);
-  console.info('text_msg msg:', readWStringPtr(text_msg).readUtf16String());
+  console.log('text_msg msg:', readWStringPtr(text_msg).readUtf16String());
   // console.log('\n\n');
 
   var send_message_mgr_addr = moduleBaseAddress.add(wxOffsets.kGetSendMessageMgr);
@@ -759,13 +759,13 @@ const sendMsgNativeFunction = (talkerId: any, content: any) => {
   mgr();
 
   // 发送文本消息
-  // console.info('chat_msg:', chat_msg);
-  // console.info('to_user:', to_user);
-  // console.info('text_msg:', text_msg);
-  // console.info('temp:', temp);
+  // console.log('chat_msg:', chat_msg);
+  // console.log('to_user:', to_user);
+  // console.log('text_msg:', text_msg);
+  // console.log('temp:', temp);
   var success = send(chat_msg, to_user, text_msg, temp, 1, 1, 0, 0);
 
-  console.info('sendText success:', success);
+  console.log('sendText success:', success);
 
   // 释放ChatMsg内存
   free(chat_msg);
@@ -826,8 +826,8 @@ const recvMsgNativeCallback = (() => {
             const contentArr = msg.content.split(':\n')
             // console.log('contentArr:', contentArr)
             if (contentArr.length > 1) {
-              talkerId =
-                content = msg.content.replace(`${contentArr[0]}:\n`, '')
+              talkerId = contentArr[0]
+              content = msg.content.replace(`${contentArr[0]}:\n`, '')
             } else {
               content = msg.content
             }
@@ -903,8 +903,8 @@ const recvMsgNativeCallbackTest = (() => {
             const contentArr = msg.content.split(':\n')
             // console.log('contentArr:', contentArr)
             if (contentArr.length > 1) {
-              talkerId =
-                content = msg.content.replace(`${contentArr[0]}:\n`, '')
+              talkerId = contentArr[0]
+              content = msg.content.replace(`${contentArr[0]}:\n`, '')
             } else {
               content = msg.content
             }
