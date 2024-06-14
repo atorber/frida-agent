@@ -225,7 +225,7 @@ export interface WeChatMessage {
     type: number;
 
     base64Img?: string;
-    isSelf?: boolean;
+    isSelf: boolean;
 }
 
 export function ReadWeChatStr(addr: any) {

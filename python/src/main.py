@@ -4,7 +4,7 @@ import sys
 # 读取agent目录下的xp.js文件，获得js代码
 # 使用UTF-8编码打开文件
 agentSource = open("../agent/xp-3.9.10.27-lite.js", "r", encoding="utf-8").read()
-# print(agentSource)
+print(agentSource)
 
 def on_message(message, data):
     print("[on_message] message:", message, "data:", data)

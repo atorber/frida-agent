@@ -740,9 +740,3 @@ function onMessage(message: any) {
 
 }
 recv(onMessage);
-
-rpc.exports = {
-  callFunction: function (contactId: any, text: any) {
-    return sendMsg(contactId, text);
-  }
-};
