@@ -13,6 +13,10 @@ import json
 clients = set()  # 追踪所有连接的 WebSocket 客户端
 log_queue = queue.Queue()  # 创建一个线程安全的队列
 stop_event = asyncio.Event()  # 用于停止异步任务的事件
+ws_stop_event = asyncio.Event()  # 用于停止 WebSocket 服务器的事件
+ws_server = None  # 保存 WebSocket 服务器实例
+session = None  # 保存 frida 会话实例
+loop = asyncio.new_event_loop()
 
 # 日志记录函数
 def log(message):
@@ -47,7 +51,7 @@ def resource_path(relative_path):
 def on_message(message, data):
     if 'payload' in message:
         content = message['payload']['text']
-        contactId = message['payload']['talkerId'] | 'self'
+        contactId = message['payload']['talkerId'] or 'self'
         log(f"接收到的内容: {content}, 来自用户: {contactId}")
         log(f"消息原文: {json.dumps(message['payload'])}")
         if content == "ding":
@@ -58,7 +62,7 @@ def on_message(message, data):
                     'text': 'dong',
                     'contactId': contactId,
                 }})
-        asyncio.run(broadcast_message(message['payload']))
+        asyncio.run_coroutine_threadsafe(broadcast_message(message['payload']), loop)
 
 # 广播消息到所有 WebSocket 客户端
 async def broadcast_message(payload):
@@ -74,8 +78,6 @@ async def broadcast_message(payload):
 def start_script():
     global session, script
     try:
-        server_thread.start()
-
         log("尝试附加到 WeChat.exe 进程...")
         session = frida.attach("WeChat.exe")
         script_path = resource_path("xp-3.9.10.27-lite.js")
@@ -84,15 +86,17 @@ def start_script():
         script = session.create_script(script_content)
         script.on("message", on_message)
         script.load()
-        log("Frida 脚本加载成功。")
+        log("API服务加载成功...")
     except Exception as e:
         log(f"错误: {str(e)}")
 
 # 停止Frida脚本
 def stop_script():
+    global session
     try:
         if session:
             session.detach()
+            session = None
             log("已从进程分离。")
     except Exception as e:
         log(f"错误: {str(e)}")
@@ -112,9 +116,18 @@ async def websocket_handler(websocket, path):
 
 # 启动WebSocket服务器
 async def start_websocket_server():
-    server = await websockets.serve(websocket_handler, "localhost", 19099)
+    global ws_server
+    ws_server = await websockets.serve(websocket_handler, "localhost", 19099)
     log("WebSocket 服务器已启动，监听端口 19099")
-    await server.wait_closed()
+    await ws_stop_event.wait()  # 等待停止事件
+    ws_server.close()
+    await ws_server.wait_closed()
+    log("WebSocket 服务器已停止")
+
+# 停止 WebSocket 服务器
+def stop_websocket_server():
+    ws_stop_event.set()
+    log("停止 WebSocket 服务器的请求已发送")
 
 # 创建主窗口
 root = tk.Tk()
@@ -128,12 +141,20 @@ frame = tk.Frame(root)
 frame.pack(pady=10, padx=10)
 
 # 创建启动 Frida 脚本的按钮
-start_button = tk.Button(frame, text="Start", command=start_script)
+start_button = tk.Button(frame, text="启动", command=start_script)
 start_button.pack(side=tk.LEFT, padx=5)
 
 # 创建停止 Frida 脚本的按钮
-stop_button = tk.Button(frame, text="Stop", command=stop_script)
+stop_button = tk.Button(frame, text="停止", command=stop_script)  # Fixed syntax error here
 stop_button.pack(side=tk.LEFT, padx=5)
+
+# 创建停止 WebSocket 服务器的按钮
+# stop_ws_button = tk.Button(frame, text="Stop WS Service", command=stop_websocket_server)
+# stop_ws_button.pack(side=tk.LEFT, padx=5)
+
+# 创建退出程序的按钮
+# exit_button = tk.Button(frame, text="Exit", command=lambda: on_closing(force=True))
+# exit_button.pack(side=tk.LEFT, padx=5)
 
 # 创建用于显示调试输出的滚动文本框
 debug_text = scrolledtext.ScrolledText(frame, state=tk.DISABLED, width=80, height=20)
@@ -141,18 +162,39 @@ debug_text.pack(pady=10)
 
 # 在另一个线程中启动WebSocket服务器
 def start_server():
-    asyncio.run(start_websocket_server())
+    asyncio.run_coroutine_threadsafe(start_websocket_server(), loop)
 
 # 启动WebSocket服务器线程
 server_thread = Thread(target=start_server)
+server_thread.start()
 
 # 关闭程序时的清理操作
-def on_closing():
-    stop_event.set()  # 触发停止事件
-    stop_script()  # 停止Frida脚本
-    # 关闭WebSocket服务器
-    if server_thread.is_alive():
-        server_thread.join()
+def on_closing(force=False):
+    if force or messagebox.askokcancel("Quit", "确定退出?"):
+        # 设置停止事件
+        stop_event.set()
+        # 停止 WebSocket 服务器
+        ws_stop_event.set()
+        # 停止 Frida 脚本
+        stop_script()
+        # 确保异步任务在主线程中执行
+        root.after(100, lambda: root.quit())
+
+# 异步停止Frida脚本
+async def stop_script_async():
+    stop_script()
+
+# 异步关闭WebSocket服务器
+async def stop_websocket_server_async():
+    if ws_server is not None:
+        ws_stop_event.set()
+        await ws_server.wait_closed()
+    log("WebSocket 服务器已关闭")
+
+# 在关闭过程中等待所有异步任务完成
+async def wait_for_closing():
+    await stop_script_async()
+    await stop_websocket_server_async()
     root.destroy()  # 销毁Tkinter主窗口
     log("程序已退出")
 
@@ -168,6 +210,9 @@ async def run_tk():
         except asyncio.CancelledError:
             print("CancelledError")
             break
-            
 
-asyncio.run(run_tk())
+    await wait_for_closing()
+
+# Create and set the event loop
+asyncio.set_event_loop(loop)
+loop.run_until_complete(run_tk())
