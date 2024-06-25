@@ -1,6 +1,6 @@
 {
   "name": "frida-agent-example",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Example Frida agent written in TypeScript",
   "private": true,
   "main": "agent/index.ts",
@@ -15,9 +15,9 @@
     "start:xp:3.9.10.19": "frida -l agent/xp-3.9.10.19.js WeChat.exe",
     "watch:http": "frida-compile agent/http.ts -o agent/http.js -w",
     "start:http": "frida -l agent/http.js WeChat.exe",
-    "watch:lite": "frida-compile agent/xp-3.9.10.27-lite.ts -o agent/xp-3.9.10.27-lite.js -w",
-    "start:lite": "frida -l agent/xp-3.9.10.27-lite.js WeChat.exe",
-    "build:lite": "frida-compile agent/xp-3.9.10.27-lite.ts -o dist/xp-3.9.10.27-lite.js -c",
+    "watch:lite": "frida-compile agent/xp-3.9.10.27.ts -o agent/xp-3.9.10.27.js -w",
+    "start:lite": "frida -l agent/xp-3.9.10.27.js WeChat.exe",
+    "build:lite": "frida-compile agent/xp-3.9.10.27.ts -o dist/xp-3.9.10.27.js -c",
     "watch:dev": "frida-compile agent/dev.ts -o agent/dev.js -w",
     "start:dev": "frida -l agent/dev.js WeChat.exe",
     "start:inject": "frida -l examples/inject.js WeChat.exe"
@@ -36,6 +36,7 @@
     "http-parser-js": "^0.5.8",
     "koa": "^2.7.0",
     "koa-router": "^7.4.0",
+    "sidecar": "^1.0.19",
     "ws": "^8.17.0"
   }
 }

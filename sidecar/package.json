@@ -1,0 +1,41 @@
+{
+  "name": "wechat-sidecar",
+  "version": "0.1.4",
+  "description": "A WeChat Sidecar Demo for WeChat 3.9.10.19",
+  "main": "index.js",
+  "scripts": {
+    "lint": "npm run lint:es && npm run lint:ts",
+    "lint:ts": "tsc --noEmit",
+    "lint:es": "eslint --ignore-pattern fixtures/ \"src/**/*.ts\"",
+    "start": "ts-node src/main.ts",
+    "test": "echo test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/huan/wechat-sidecar.git"
+  },
+  "keywords": [
+    "sidecar",
+    "wechat",
+    "wechaty"
+  ],
+  "author": "Huan LI <zixia@zixia.net>",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/huan/wechat-sidecar/issues"
+  },
+  "homepage": "https://github.com/huan/wechat-sidecar#readme",
+  "dependencies": {
+    "sidecar": "^1.0.19"
+  },
+  "git": {
+    "scripts": {
+      "pre-push": "npx git-scripts-pre-push"
+    }
+  },
+  "devDependencies": {
+    "@chatie/eslint-config": "^0.12.4",
+    "@chatie/git-scripts": "^0.6.2",
+    "@chatie/tsconfig": "^0.16.2"
+  }
+}

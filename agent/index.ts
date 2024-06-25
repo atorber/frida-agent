@@ -1,4 +1,6 @@
-import { log } from "./logger.js";
+const log = (msg:any) => {
+    console.log(msg);
+}
 
 // Frida.version
 log('Frida.version:'+Frida.version);

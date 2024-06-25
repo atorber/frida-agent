@@ -29,10 +29,10 @@ python main.py
 ### 发送消息
 
 ```bash
-pyinstaller --onefile --add-data "xp-3.9.10.27-lite.js;." main.py
+pyinstaller --onefile --add-data "xp-3.9.10.27.js;." maiWeeBotn.py
 
-pyinstaller --onefile --windowed --add-data "xp-3.9.10.27-lite.js;." main.py
+pyinstaller --onefile --windowed --add-data "xp-3.9.10.27.js;." WeeBot.py
 
-pyinstaller --onefile --windowed --noconsole --add-data "xp-3.9.10.27-lite.js;." main.py
+pyinstaller --onefile --windowed --noconsole --add-data "xp-3.9.10.27.js;." WeeBot.py
 
 ```

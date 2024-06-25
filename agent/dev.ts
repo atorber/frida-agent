@@ -17,27 +17,31 @@ import {
     readWideString,
     readStringPtr,
     getStringByStrAddr,
+    initStruct,
+    initidStruct,
+    initmsgStruct,
 } from './utils.js'
 import {
     Contact,
     Message,
 } from './types.js'
-import { listeners } from 'process'
+import { listeners, prependListener } from 'process'
+import test from 'node:test'
+import { text } from 'stream/consumers'
+import { timeEnd } from 'console'
 
 /*
 偏移地址
 */
 const offsets = {
     // kDoAddMsg: 0x23D2B10, // done
-    kDoAddMsg: 0x2205510,
-    kGetAccountServiceMgr: 0x1C1FE90, // done
+    kDoAddMsg: 0x2205510, // 3.9.10.27
+    kGetAccountServiceMgr: 0x1C1FE90, // 3.9.10.27
     kSyncMsg: 0xc39680,
     kSyncMsgNext: 0xc39680,
-    kGetSendMessageMgr: 0x1C1E690, // done
-    kSendTextMsg: 0x238DDD0, // done
-    kFreeChatMsg: 0x1C1FF10, // done
-    // const uint64_t kGetContactMgr = 0x1C0BDE0;
-    kGetContactMgr: 0x1C0BDE0,
+    kSendTextMsg: 0x238DDD0, // 3.9.10.27
+    kFreeChatMsg: 0x1C1FF10, // 3.9.10.27
+    kGetContactMgr: 0x1C0BDE0, // 3.9.10.27
     // const uint64_t kSearchContactMgr = 0x2065F80;
     kSearchContactMgr: 0x2065F80,
     // const uint64_t kChatRoomMgr = 0x1C4E200;
@@ -64,8 +68,7 @@ const offsets = {
     kGetContact: 0x225F950,
     // const uint64_t kDelContact = 0x2263490;
     kDelContact: 0x2263490,
-    // const uint64_t kGetContactList = 0x2265540;
-    kGetContactList: 0x2265540,
+    kGetContactList: 0x2265540, // 3.9.10.27
     // const uint64_t kRemarkContact = 0x22550D0;
     kRemarkContact: 0x22550D0,
     // const uint64_t kBlackContact = 0x2255310;
@@ -82,35 +85,36 @@ const offsets = {
     // const uint64_t kNetSceneGetContactLabelList = 0x2245F00;            //NetSceneGetContactLabelList::NetSceneGetContactLabelList
 
     // const uint64_t kSceneCenter = 0x1CDD710;
+    kSceneCenter: 0x1CDD710,
     // const uint64_t kSceneNetSceneBase = 0x2454EB0;
-
+    kSceneNetSceneBase: 0x2454EB0,
     // const uint64_t kNewContactLabelIdStruct = 0x2189150;
     // const uint64_t kNetSceneAddContactLabel = 0x245BE40;                //NetSceneAddContactLabel::NetSceneAddContactLabel
     // const uint64_t kNetSceneDelContactLabel = 0x248F410;      
 
     // const uint64_t kNetSceneModifyContactLabel = 0x250C480;
-
-    // const uint64_t kSendMessageMgr = 0x1C1E690;
+    kNetSceneModifyContactLabel: 0x250C480,
+    kSendMessageMgr: 0x1C1E690, // 3.9.10.27
     // const uint64_t kAppMsgMgr = 0x1C23630;
-
+    kAppMsgMgr: 0x1C23630,
     // const uint64_t kSendTextMsg = 0x238DDD0;
     // const uint64_t kSendImageMsg = 0x2383560;
     kSendImageMsg: 0x2383560,
     // const uint64_t kSendFileMsg = 0x21969E0;
-    // const uint64_t kSendPatMsg = 0x2D669B0;
-    kSendPatMsg: 0x2D669B0,
+    kSendFileMsg: 0x21969E0,
+    kSendPatMsg: 0x2D669B0, // 3.9.10.27
     // const uint64_t kFreeChatMsg = 0x1C1FF10;
     // const uint64_t kNewChatMsg = 0x1C28800;
     kNewChatMsg: 0x1C28800,
     // const uint64_t kCreateChatRoom = 0x221AF50;
-    // const uint64_t kChatRoomInfoConstructor = 0x25CF470;
-    // const uint64_t kGetChatRoomDetailInfo = 0x222BEA0;
-    // const uint64_t kGetChatroomMemberDetail = 0x2226C80;
+    kChatRoomInfoConstructor: 0x25CF470, // 3.9.10.27
+    kGetChatRoomDetailInfo: 0x222BEA0, // 3.9.10.27
+    kGetChatroomMemberDetail: 0x2226C80, // 3.9.10.27
     // const uint64_t kDoAddMemberToChatRoom = 0x221B8A0;
     // const uint64_t kDoDelMemberFromChatRoom = 0x221BEE0;
     // const uint64_t kInviteMemberToChatRoom = 0x221B280;
     // const uint64_t kQuitAndDelChatRoom = 0x2225EF0;
-    // const uint64_t kModChatRoomTopic = 0x2364610;
+    kModChatRoomTopic: 0x2364610, // 3.9.10.27
     // const uint64_t kGetA8Key = 0x24ABD40;
 
     // const uint64_t kTimelineGetFirstPage = 0x2EFE660;
@@ -132,6 +136,23 @@ const offsets = {
 }
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
+
+let selfInfo: any = {}
+
+/*---------------------Base---------------------*/
+
+const checkLogin = () => {
+    let success = -1;
+    const accout_service_addr = moduleBaseAddress.add(offsets.kGetAccountServiceMgr);
+    let getAccountService = new NativeFunction(accout_service_addr, 'pointer', []);
+    let service_addr = getAccountService();
+    if (!service_addr.isNull()) {
+        success = service_addr.add(0x7F8).readU32();
+    }
+    return success;
+}
+
+// console.log('checkLogin:', checkLogin())
 
 /*---------------------ContactSelf---------------------*/
 /*
@@ -280,6 +301,8 @@ const contactSelfInfo = () => {
     return myself
 
 }
+
+selfInfo = contactSelfInfo()
 // console.log('call contactSelfInfo res:\n', JSON.stringify(contactSelfInfo(), null, 2))
 
 /*---------------------Contact---------------------*/
@@ -333,7 +356,7 @@ const contactList = () => {
     return contacts;
 };
 
-console.log('call contactList() res:\n', JSON.stringify(contactList().length))
+// console.log('call contactList() res:\n', JSON.stringify(contactList().length))
 
 // 解析联系人信息，信息不准确
 function parseContact(start: any) {
@@ -362,9 +385,64 @@ function parseContact(start: any) {
     // console.log('temp:', JSON.stringify(temp, null, 2))
 
     const info: any = {}
-    /*
+
+    const contact: Contact = {
+        id: temp.wxid,
+        gender: 1,
+        type: temp.type,
+        name: temp.nickname,
+        friend: true,
+        star: false,
+        coworker: temp.wxid.indexOf('@openim') > -1,
+        avatar: info.SmallHeadImgUrl,
+        address: info.Province + info.City,
+        alias: info.Alias,
+        city: info.City,
+        province: info.Province,
+        weixin: temp.custom_account,
+        corporation: '',
+        title: '',
+        description: '',
+        phone: [],
+    };
+    return contact;
+
+}
+
+/*
+获取联系人详情-未完成
+*/
+async function contactRawPayload(wxid: string) {
+    // 用于创建Contact对象的Constructor
+    var constructorAddr = moduleBaseAddress.add(offsets.kNewContact);
+    var Constructor = new NativeFunction(constructorAddr, 'pointer', ['pointer']);
+
+    // 获取Contact管理器的Instance
+    var instanceAddr = moduleBaseAddress.add(offsets.kGetContactMgr);
+    var Instance = new NativeFunction(instanceAddr, 'pointer', []);
+
+    // 获取联系人信息的GetContact函数
+    var getContactAddr = moduleBaseAddress.add(offsets.kGetContact);
+    var GetContact = new NativeFunction(getContactAddr, 'int64', ['pointer', 'pointer', 'pointer']);
+
+    // 构造toUser WeChatWString对象
+    var toUserStr = Memory.allocUtf16String(wxid);
+    var toUserStrPtr = Memory.alloc(Process.pointerSize);
+    toUserStrPtr.writePointer(toUserStr);
+
+    // 分配内存用于存放Contact对象
+    var contactBuf = Memory.alloc(0x6B0); // Contact对象所需的内存大小
+
+    // 调用Constructor和GetContact函数
+    Constructor(contactBuf); // 构造Contact对象
+    var success = GetContact(Instance(), toUserStrPtr, contactBuf);
+
+    // 读取并转换获取的联系人信息到适当的格式——这需要根据common::ContactCast转换方法的具体实施来确定
+    // 假设ContactCast就是简单地将内存信息拷贝到另外一个buffer（实际情况会更复杂）
+    var info: any = {}; // 假设这是一个对JavaScript对象的映射
+    const start = contactBuf;
     // mmString   UserName;			//0x10  + 0x20
-    info.UserName = start.add(0x10 + 0x20).readPointer().readUtf16String();
+    info.UserName = readWideString(start.add(0x10));
     // mmString   Alias;				//0x30  + 0x20
     info.Alias = start.add(0x30 + 0x20).readPointer().readUtf16String();
     // mmString   EncryptUserName;		//0x50  + 0x20
@@ -379,7 +457,7 @@ function parseContact(start: any) {
     // mmString   Remark;				//0x80  + 0x20
     info.Remark = start.add(0x80 + 0x20).readPointer().readUtf16String();
     // mmString   NickName;			//0xA0  + 0x20
-    info.NickName = start.add(0xA0 + 0x20).readPointer().readUtf16String();
+    info.NickName = readWideString(start.add(0xA0));
     // mmString   LabelIDList;			//0xC0  + 0x20
     info.LabelIDList = start.add(0xC0 + 0x20).readPointer().readUtf16String();
     // mmString   DomainList;			//0xE0  + 0x20
@@ -392,10 +470,10 @@ function parseContact(start: any) {
     // mmString   RemarkPYInitial;		//0x148 + 0x20
     // mmString   RemarkQuanPin;		//0x168 + 0x20
     // mmString   BigHeadImgUrl;		//0x188 + 0x20
-    info.BigHeadImgUrl = start.add(0x188 + 0x20).readPointer().readUtf16String();
+    info.BigHeadImgUrl = readWideString(start.add(0x188 + 0x20));
     // mmString   SmallHeadImgUrl;		//0x1A8 + 0x20
-    info.SmallHeadImgUrl = start.add(0x1A8 + 0x20).readPointer().readUtf16String();
-    // mmString   _HeadImgMd5;			//0x1C8 + 0x20 //�����ʽ��һ����Ҫ���� ֻռλ
+    info.SmallHeadImgUrl = readWideString(start.add(0x1A8));
+    // mmString   _HeadImgMd5;			//0x1C8 + 0x20 
 
     // //int64_t  ChatRoomNotify;      //0x1E8
     info.ChatRoomNotify = start.add(0x1E8).readPointer().readUtf16String();
@@ -416,21 +494,21 @@ function parseContact(start: any) {
     // int32_t   _0x254;				//0x254 + 0x4
 
     // mmString  WeiboNickname;		//0x258 + 0x20
-    info.WeiboNickname = start.add(0x258 + 0x20).readPointer().readUtf16String();
+    info.WeiboNickname = readWideString(start.add(0x258 + 0x20));
 
     // int32_t  PersonalCard;		   //0x278 + 0x4
     // int32_t  _0x27C;			   //0x27c + 0x4
 
     // mmString  Signature;		  //0x280 + 0x20
     // mmString  Country;			  //0x2A0 + 0x20
-    info.Country = start.add(0x2A0 + 0x20).readPointer().readUtf16String();
+    info.Country = readWideString(start.add(0x2A0 + 0x20));
 
     // std::vector<mmString>  PhoneNumberList; //0x2C0 + 0x18
 
     // mmString  Province;				//0x2D8 + 0x20
-    info.Province = start.add(0x2D8 + 0x20).readPointer().readUtf16String();
+    info.Province = start.add(0x2D8 + 0x20).readUtf16String();
     // mmString  City;					//0x2F8 + 0x20
-    info.City = start.add(0x2F8 + 0x20).readPointer().readUtf16String();
+    info.City = start.add(0x2F8 + 0x20).readUtf16String();
     // int32_t   Source;				//0x318 + 0x4
     info.Source = start.add(0x318).readU32();
     // int32_t   _0x31C;				//0x31C + 0x4
@@ -480,37 +558,17 @@ function parseContact(start: any) {
     info.CardImgUrl = start.add(0x4E0 + 0x20).readPointer().readUtf16String();
     // char _res[0x1A8];           //0x500 + 
 
-    // console.log('contact info:', JSON.stringify(info, null, 2))
+    console.log('contact info:', JSON.stringify(info))
 
-    */
-    const contact: Contact = {
-        id: temp.wxid,
-        gender: 1,
-        type: temp.type,
-        name: temp.nickname,
-        friend: true,
-        star: false,
-        coworker: temp.wxid.indexOf('@openim') > -1,
-        avatar: info.SmallHeadImgUrl,
-        address: info.Province + info.City,
-        alias: info.Alias,
-        city: info.City,
-        province: info.Province,
-        weixin: temp.custom_account,
-        corporation: '',
-        title: '',
-        description: '',
-        phone: [],
-    };
-    return contact;
 
+
+    // 请根据实际情况自行实现清理内存的逻辑
+    // 如果contact有destructor，可能需要调用destructor来确保内存被正确释放
+
+    return success;
 }
 
-/*
-获取联系人详情
-*/
-async function contactRawPayload(id: string) {
-}
+// contactRawPayload('tyutluyc')
 
 /*---------------------Room---------------------*/
 /*
@@ -563,7 +621,49 @@ function roomList() {
     return contacts;
 };
 
-console.log('call roomList() res:\n', JSON.stringify(roomList().length))
+// console.log('call roomList() res:\n', JSON.stringify(roomList().length))
+
+/*
+获取群详情
+*/
+async function roomRawPayload(roomId: string) {
+    let success = -1;
+    let instanceAddr = moduleBaseAddress.add(offsets.kChatRoomMgr);
+    let constructorAddr = moduleBaseAddress.add(offsets.kChatRoomInfoConstructor);
+    let getChatRoomDetailInfoAddr = moduleBaseAddress.add(offsets.kGetChatRoomDetailInfo);
+
+    let instance = new NativeFunction(instanceAddr, 'pointer', []);
+    let constructor = new NativeFunction(constructorAddr, 'pointer', ['pointer']);
+    let getChatRoomDetailInfo = new NativeFunction(getChatRoomDetailInfoAddr, 'uint8', ['pointer', 'pointer', 'pointer', 'int']);
+
+    let roomIdStr = writeWStringPtr(roomId);
+    let buff = Memory.alloc(0x148);
+
+    // 调用constructor创建ChatRoomInfoBuf
+    let chatRoomInfoBuf = constructor(buff);
+    const instancePtr = instance();
+
+    console.log('instancePtr:', instancePtr)
+
+    // 调用GetChatRoomDetailInfo
+    success = getChatRoomDetailInfo(instancePtr, roomIdStr, chatRoomInfoBuf, 1);
+
+    let info = {};
+    if (success === 1) {
+        info = {
+            id: readWideString(chatRoomInfoBuf.add(0x8)),
+            notice: readWideString(chatRoomInfoBuf.add(0x28)),
+            admin: readWideString(chatRoomInfoBuf.add(0x48)),
+            xml: readWideString(chatRoomInfoBuf.add(0x78)),
+        };
+        console.log('获取到的聊天室详情信息:', JSON.stringify(info, null, 2));
+    } else {
+        console.error('获取聊天室详情信息失败');
+    }
+    return info;
+};
+
+// roomRawPayload('21341182572@chatroom')
 
 /*
 解散群
@@ -593,9 +693,54 @@ async function roomAdd(
 }
 
 /*
-设置群名称
+设置群名称 3.9.10.27 未完成
 */
-async function roomTopic(roomId: string, topic: string) { }
+async function roomTopic(roomId: string, topic: string) {
+    let result: any = -1;
+    // 计算instance函数和ModChatRoomTopic函数的地址
+    var instanceAddr = moduleBaseAddress.add(offsets.kOpLogMgr);
+    var modChatRoomTopicAddr = moduleBaseAddress.add(offsets.kModChatRoomTopic);
+
+    // 定义这两个函数
+    var Instance = new NativeFunction(instanceAddr, 'pointer', []);
+    var ModChatRoomTopic = new NativeFunction(modChatRoomTopicAddr, 'uint64', ['pointer', 'pointer', 'pointer']);
+
+    const instancePtr = Instance();
+    console.log('instancePtr:', instancePtr)
+
+    // 创建roomIdStr和topicStr的内存表示
+    var roomIdStrPtr = writeWStringPtr(roomId);
+    var topicStrPtr = writeWStringPtr(topic);
+
+    console.log('roomId:', readWStringPtr(roomIdStrPtr).readUtf16String());
+    console.log('topic:', readWStringPtr(topicStrPtr).readUtf16String());
+
+    // 调用ModChatRoomTopic
+    // result = ModChatRoomTopic(instancePtr, roomIdStrPtr, topicStrPtr);
+    console.log("ModChatRoomTopic result:", result);
+
+    return result;
+}
+
+// roomTopic('21341182572@chatroom', '大师是群主111')
+
+// 调试：监听函数调用
+Interceptor.attach(
+    moduleBaseAddress.add(offsets.kModChatRoomTopic), {
+    onEnter(args) {
+        try {
+            // 参数打印
+            console.log("called with args: " + args[0] + ", " + args[1] + ", " + args[2] + ", " + args[3] + ", " + args[4] + ", " + args[5] + ", " + args[6] + ", " + args[7]);
+            console.log('args[0]:', args[0]);
+            console.log('roomId:', readWStringPtr(args[1]).readUtf16String());
+            console.log('topic:', readWStringPtr(args[2]).readUtf16String());
+
+        } catch (e: any) {
+            console.error('修改群名称失败：', e)
+            throw new Error(e)
+        }
+    },
+})
 
 /*
 创建群
@@ -626,7 +771,10 @@ async function roomQRCode(roomId: string): Promise<string> {
 获取群成员列表
 */
 async function roomMemberList(roomId: string) {
+    console.log('roomMemberList roomId:', roomId)
 }
+
+// roomMemberList('21341182572@chatroom')
 
 /*---------------------Room Invitation---------------------*/
 /*
@@ -689,6 +837,54 @@ async function tagContactAdd(
     contactId: string,
 ): Promise<void> { }
 
+/*未完成*/
+const modifyContactLabel = (wxidList: string[], labelList: string) => {
+    // 定义ContactLabelIdStruct的构造函数
+    function createContactLabelIdStruct(wxid: string, label: string) {
+        // 分配内存
+        let struct = Memory.alloc(0x48); // 结构体大小
+        struct.writeU64(0x0); // _0x0
+        let wxidStr = Memory.allocUtf16String(wxid);
+        struct.add(0x8).writePointer(wxidStr); // buf
+        struct.add(0x10).writeU32(wxid.length); // len
+        struct.add(0x14).writeU32(wxid.length); // cap
+        // 跳过_0x18 和 _0x20
+        let labelStr = Memory.allocUtf16String(label);
+        struct.add(0x28).writePointer(labelStr); // c_buf
+        struct.add(0x30).writeU32(label.length); // c_len
+        struct.add(0x34).writeU32(label.length); // c_cap
+        // 跳过_0x38 和 _0x40
+
+        return struct;
+    }
+
+    // 根据wxidList初始化ContactLabelIdStruct数组
+    let structsArray = new Array(wxidList.length);
+    for (let i = 0; i < wxidList.length; i++) {
+        structsArray[i] = createContactLabelIdStruct(wxidList[i], labelList);
+    }
+
+    let vecStruct = Memory.alloc(structsArray.length * Process.pointerSize);
+    for (let i = 0; i < structsArray.length; i++) {
+        vecStruct.add(i * Process.pointerSize).writePointer(structsArray[i]);
+    }
+
+    let netSceneBaseEx = Memory.alloc(0x308); // 伪造NetSceneBaseEx
+
+    var modContactLabelAddr = moduleBaseAddress.add(offsets.kNetSceneModifyContactLabel);
+    var modContactLabel = new NativeFunction(modContactLabelAddr, 'uint64', ['pointer', 'pointer']);
+
+    var instanceAddr = moduleBaseAddress.add(offsets.kSceneCenter);
+    var instance = new NativeFunction(instanceAddr, 'pointer', []);
+
+    var sceneNetSceneBaseAddr = moduleBaseAddress.add(offsets.kSceneNetSceneBase);
+    var sceneNetSceneBase = new NativeFunction(sceneNetSceneBaseAddr, 'int64', ['pointer', 'uint64']);
+
+    return sceneNetSceneBase(instance(), modContactLabel(netSceneBaseEx, vecStruct));
+}
+
+// modifyContactLabel(['tyutluyc'], 'test')
+
 /*
 联系人标签移除
 */
@@ -738,14 +934,14 @@ const messageSendText = (contactId: string, text: string) => {
     to_user = writeWStringPtr(contactId);
     text_msg = writeWStringPtr(text);
 
-    var send_message_mgr_addr = moduleBaseAddress.add(offsets.kGetSendMessageMgr);
+    var send_message_mgr_addr = moduleBaseAddress.add(offsets.kSendMessageMgr);
     var send_text_msg_addr = moduleBaseAddress.add(offsets.kSendTextMsg);
     var free_chat_msg_addr = moduleBaseAddress.add(offsets.kFreeChatMsg);
 
     var chat_msg = Memory.alloc(0x460 * Process.pointerSize); // 在frida中分配0x460字节的内存
     chat_msg.writeByteArray(Array(0x460 * Process.pointerSize).fill(0)); // 清零分配的内存
 
-    var temp = Memory.alloc(3 * Process.pointerSize); // 分配临时数组内存
+    let temp = Memory.alloc(3 * Process.pointerSize); // 分配临时数组内存
     temp.writeByteArray(Array(3 * Process.pointerSize).fill(0)); // 初始化数组
 
     // 定义函数原型并实例化 NativeFunction 对象
@@ -768,16 +964,389 @@ const messageSendText = (contactId: string, text: string) => {
 }
 // messageSendText('filehelper', 'hello world')
 
+const findAdd = (add: any) => {
+    console.log('findAdd is called:', add);
+    const max = 10;
+
+    for (let i = 0; i < max; i++) {
+        try {
+            const offset = i * 0x20;
+            console.log('findAdd offset:', i, offset);
+
+            const str = readWideString(add.readPointer().add(offset));
+            console.log('findAdd str:', str);
+
+            if (str) {
+                console.log('findAdd str is:', i, offset, str);
+            } else {
+                console.log('findAdd str is not:', i);
+                // 终止循环
+                break;
+            }
+            // return i
+        } catch (e) {
+            console.error('kSendTextMsg arg3-2:', i, e);
+            break
+        }
+    }
+
+    return 'unknown';
+}
+
+/*
+发送@消息 3.9.10.27-未完成
+*/
+const messageSendAtText = (contactId:string, text:string, atWxids:string[]) => {
+    let nickname = '';
+    if (atWxids && atWxids.length && atWxids[0] && atWxids[0] === 'notify@all') {
+        nickname = '@所有人';
+        text = nickname + ' ' + text;
+    }
+
+    const offSize = 0x20
+
+    const tempSize = offSize * atWxids.length;
+
+    // 使用临时缓冲区
+    const tempBuffer = Memory.alloc(tempSize);
+    console.log('atWxids temp 初始化:', tempBuffer);
+
+    for (let i = 0; i < atWxids.length; i++) {
+        const wxoff = offSize * i;
+        console.log('写入atWxids:', i, wxoff);
+        console.log('写入atWxids字符串:', i, atWxids[i]);
+        let wxidWStringPtr = writeWStringPtr(atWxids[i]);
+        console.log('写入atWxids写入内存的读取:', i, readWideString(wxidWStringPtr));
+        console.log('写入atWxids指针:', i, wxidWStringPtr);
+        tempBuffer.add(offSize * i).writePointer(wxidWStringPtr);
+        console.log('写入atWxids指针读取:', i, tempBuffer.add(wxoff).readPointer());
+        console.log('写入atWxids读取结果:', wxoff, readWideString(tempBuffer.add(wxoff).readPointer()));
+    }
+
+    // 复制临时缓冲区到temp，并保护内存为只读
+    // Memory.copy(temp, tempBuffer, tempSize);
+    // Memory.protect(temp, tempSize, 'r--');
+
+    console.log('atWxids temp 初始化:', tempBuffer);
+    console.log('atWxids temp 存储的指针:', tempBuffer.readPointer());
+
+    console.log('messageSendAtText temp 第一个wxid:', 0, readWideString(tempBuffer.add(0).readPointer()));
+    // console.log('messageSendAtText temp 第二个wxid:', readWideString(tempBuffer.add(offSize).readPointer()));
+    console.log('messageSendAtText temp findAdd:', findAdd(tempBuffer));
+
+    let to_user = writeWStringPtr(contactId);
+    let text_msg = writeWStringPtr(text);
+
+    const send_message_mgr_addr = moduleBaseAddress.add(offsets.kSendMessageMgr);
+    const send_text_msg_addr = moduleBaseAddress.add(offsets.kSendTextMsg);
+    const free_chat_msg_addr = moduleBaseAddress.add(offsets.kFreeChatMsg);
+
+    const chat_msg = Memory.alloc(0x460 * Process.pointerSize); // 在frida中分配0x460字节的内存
+    chat_msg.writeByteArray(Array(0x460 * Process.pointerSize).fill(0)); // 清零分配的内存
+
+    // 定义函数原型并实例化 NativeFunction 对象
+    const mgr = new NativeFunction(send_message_mgr_addr, 'void', []);
+    const send = new NativeFunction(send_text_msg_addr, 'uint64', ['pointer', 'pointer', 'pointer', 'pointer', 'int32', 'int32', 'int32', 'int32']);
+    const free = new NativeFunction(free_chat_msg_addr, 'void', ['pointer']);
+
+    // 调用发送消息管理器初始化
+    mgr();
+
+    // 发送文本消息
+    console.log('messageSendAtText chat_msg:', chat_msg);
+    console.log('messageSendAtText to_user:', readWideString(to_user));
+    console.log('messageSendAtText text_msg:', readWideString(text_msg));
+
+    const success = send(chat_msg, to_user, text_msg, tempBuffer, 0x1, 0x1, 0x0, 0x0);
+
+    console.log('sendText success:', success);
+
+    // 释放ChatMsg内存
+    free(chat_msg);
+    // free(temp)
+
+    return Number(success) > 0 ? 1 : 0; // 与C++代码保持一致，这里返回0（虽然在C++中这里应该是成功与否的指示符）
+};
+
+// messageSendAtText('21341182572@chatroom', 'hello world all', ['notify@all'])
+// messageSendAtText('21341182572@chatroom', '@超哥 hello world', ['tyutluyc', 'wxid_pnza7m7kf9tq12'])
+// messageSendAtText('21341182572@chatroom', '@超哥 hello world', ['tyutluyc'])
+
+// 调试：监听函数调用
+Interceptor.attach(
+    moduleBaseAddress.add(offsets.kSendTextMsg), {
+    onEnter(args) {
+        try {
+            // 参数打印
+            console.log("kSendTextMsg called with args: " + args[0] + ", " + args[1] + ", " + args[2] + ", " + args[3] + ", " + args[4] + ", " + args[5] + ", " + args[6] + ", " + args[7]);
+            console.log('kSendTextMsg arg0:', args[0]);
+            console.log('kSendTextMsg arg1:', readWideString(args[1]));
+            console.log('kSendTextMsg arg2:', readWideString(args[2]));
+            console.log('kSendTextMsg arg3-1:', readWideString(args[3].readPointer()));
+            console.log('kSendTextMsg arg3-2:', findAdd(args[3]));
+            console.log('kSendTextMsg arg4:', args[4].toInt32());
+            // console.log('kSendTextMsg arg4:', findType(args[4].add(0x4)));
+
+            console.log('kSendTextMsg arg5:', args[5].toInt32());
+            console.log('kSendTextMsg arg6:', args[6].toInt32());
+            console.log('kSendTextMsg arg7:', args[7].toInt32());
+
+        } catch (e: any) {
+            console.error('kSendTextMsg解析失败：', e)
+            throw new Error(e)
+        }
+    },
+})
+
+const findType = (add: any) => {
+
+    try {
+        let value = add.readPointer();
+        console.log('add is readPointer:', value);
+        return 'readPointer';
+    } catch (e) {
+        console.log('add is not readPointer:', e);
+    }
+
+    try {
+        let value = add.readUtf16String();
+        console.log('add is readUtf16String:', value);
+        return 'readUtf16String';
+    } catch (e) {
+        console.log('add is not readUtf16String:', e);
+    }
+
+    try {
+        let value = add.readCString();
+        console.log('add is readCString:', value);
+        return 'readCString';
+    } catch (e) {
+        console.log('add is not readCString:', e);
+    }
+
+    try {
+        let value = add.readUtf8String();
+        console.log('add is readUtf8String:', value);
+        return 'readUtf8String';
+    } catch (e) {
+        console.log('add is not readUtf8String:', e);
+    }
+
+    try {
+        let value = add.readS8();
+        console.log('add is readS8:', value);
+        return 'readS8';
+    } catch (e) {
+        console.log('add is not readS8:', e);
+    }
+
+    try {
+        let value = add.readS16();
+        console.log('add is readS16:', value);
+        return 'readS16';
+    } catch (e) {
+        console.log('add is not readS16:', e);
+    }
+
+    try {
+        let value = add.readS32();
+        console.log('add is readS32:', value);
+        return 'readS32';
+    } catch (e) {
+        console.log('add is not readS32:', e);
+    }
+
+    try {
+        let value = add.readS64();
+        console.log('add is readS64:', value);
+        return 'readS64';
+    } catch (e) {
+        console.log('add is not readS64:', e);
+    }
+
+    try {
+        let value = add.readU8();
+        console.log('add is readU8:', value);
+        return 'readU8';
+    } catch (e) {
+        console.log('add is not readU8:', e);
+    }
+
+    try {
+        let value = add.readU16();
+        console.log('add is readU16:', value);
+        return 'readU16';
+    } catch (e) {
+        console.log('add is not readU16:', e);
+    }
+
+    try {
+        let value = add.readU32();
+        console.log('add is readU32:', value);
+        return 'readU32';
+    } catch (e) {
+        console.log('add is not readU32:', e);
+    }
+
+    try {
+        let value = add.readU64();
+        console.log('add is readU64:', value);
+        return 'readU64';
+    } catch (e) {
+        console.log('add is not readU64:', e);
+    }
+
+    try {
+        let value = add.readFloat();
+        console.log('add is readFloat:', value);
+        return 'readFloat';
+    } catch (e) {
+        console.log('add is not readFloat:', e);
+    }
+
+    try {
+        let value = add.readDouble();
+        console.log('add is readDouble:', value);
+        return 'readDouble';
+    } catch (e) {
+        console.log('add is not readDouble:', e);
+    }
+
+    try {
+        let value = add.readByteArray(10);
+        console.log('add is readByteArray:', value);
+        return 'readByteArray';
+    } catch (e) {
+        console.log('add is not readByteArray:', e);
+    }
+
+    try {
+        let value = add.readCString();
+        console.log('add is readCString:', value);
+        return 'readCString';
+    } catch (e) {
+        console.log('add is not readCString:', e);
+    }
+
+    try {
+        let value = add.readUtf8String();
+        console.log('add is readUtf8String:', value);
+        return 'readUtf8String';
+    } catch (e) {
+        console.log('add is not readUtf8String:', e);
+    }
+
+    try {
+        let value = add.readUtf16String();
+        console.log('add is readUtf16String:', value);
+        return 'readUtf16String';
+    } catch (e) {
+        console.log('add is not readUtf16String:', e);
+    }
+
+    return 'unknown';
+}
+
 /*
 发送图片消息
 */
 async function messageSendFile(
     conversationId: string,
     file: any,
-): Promise<void> {
+): Promise<void> { }
+
+// 未完成
+const sendImageMsg = (wxid: string, fullPath: string) => {
+    let success: any = -1;
+    // 构造器、实例和函数定义
+    var constructorAddr = moduleBaseAddress.add(offsets.kNewChatMsg);
+    var destructorAddr = moduleBaseAddress.add(offsets.kFreeChatMsg);
+    var instanceAddr = moduleBaseAddress.add(offsets.kSendMessageMgr);
+    var sendImageMsgAddr = moduleBaseAddress.add(offsets.kSendImageMsg);
+
+    var Constructor = new NativeFunction(constructorAddr, 'pointer', ['pointer']);
+    var Destructor = new NativeFunction(destructorAddr, 'void', ['pointer']);
+    var Instance = new NativeFunction(instanceAddr, 'pointer', []);
+    var SendImageMsg = new NativeFunction(sendImageMsgAddr, 'int64', ['pointer', 'pointer', 'pointer', 'pointer', 'pointer']);
+
+    // 分配内存并构造ChatMsg对象
+    var msg = Memory.alloc(0x490);
+    msg.writeByteArray(Array(0x490).fill(0)); // 初始化数组
+    var pMsg = Constructor(msg);
+
+    // 分配第二个ChatMsg对象
+    var msgTmp = Memory.alloc(0x490);
+    msgTmp.writeByteArray(Array(0x490).fill(0)); // 清零分配的内存
+    var pMsgTmp = Constructor(msgTmp);
 
 
+    // 构造toUser和msgStr参数
+    var toUserStr = writeWStringPtr(wxid);
+    var msgStr = writeWStringPtr(fullPath);
+
+    // 分配和初始化变量
+    var flag = Memory.alloc(Process.pointerSize * 10); // 分配一个包含10个指针大小空间的内存块
+    var tmp1 = ptr(0);  // 分配一个8字节的内存块，用于存储QWORD
+    var tmp2 = ptr(0);  // 分配一个8字节的内存块，用于存储QWORD
+    const tmp3 = ptr(1);
+
+    // 设置flag数组中的指针
+    flag.writePointer(tmp3);
+    flag.add(Process.pointerSize * 8).writePointer(tmp1);  // flag[8] = &tmp1;
+    flag.add(Process.pointerSize * 9).writePointer(tmp2);  // flag[9] = &tmp2;
+    flag.add(Process.pointerSize).writePointer(pMsgTmp);   // flag[1] = (QWORD *)(pMsgTmp);
+
+    const instance = Instance()
+    console.log('instance:', instance)
+    console.log('pMsg:', pMsg)
+    console.log('toUserStr:', readWideString(toUserStr))
+    console.log('msgStr:', readWideString(msgStr))
+    console.log('flag:', flag.readS32())
+
+    // sendImageMsg called with args: 0x26eb82a0d50, 0xa4918fb1f0, 0xa4918faac0, 0x26ecd432818, 0xa4918fa9a0, 0x0, 0xa4918fab30, 0x7ff90b20b2fc
+    // sendImageMsg arg0: 0x26eb82a0d50
+    // sendImageMsg arg1: 0xa4918fb1f0
+    // sendImageMsg arg2: filehelper
+    // sendImageMsg arg3: C:\Users\tyutl\Downloads\wx_20240618000441.png
+    // sendImageMsg arg4: 1
+
+    // instance: 0x26eb82a0d50
+    // pMsg: 0x26ecc800600
+    // toUserStr: filehelper
+    // msgStr: C:\Users\tyutl\Downloads\wx_20240618000441.png
+    // flag: 1
+
+    success = SendImageMsg(instance, pMsg, toUserStr, msgStr, flag);
+
+    Destructor(pMsgTmp);
+    Destructor(pMsg);
+
+    console.log("SendImageMsg Success:", success);
+
+    return success;
 }
+// sendImageMsg('tyutluyc', 'C:\\Users\\tyutl\\Documents\\WeChat Files\\wxid_0o1t51l3f57221\\FileStorage\\MsgAttach\\01c2dbb9bb49519d3708de94a13d0d42\\Thumb\\2024-06\\message-7536055685103019865-url-thumb.jpg')
+// sendImageMsg('filehelper', 'C:\\Users\\tyutl\\Downloads\\wx_20240618000441.png')
+
+// 调试：监听函数调用
+Interceptor.attach(
+    moduleBaseAddress.add(offsets.kSendImageMsg), {
+    onEnter(args) {
+        try {
+            // 参数打印
+            console.log("sendImageMsg called with args: " + args[0] + ", " + args[1] + ", " + args[2] + ", " + args[3] + ", " + args[4] + ", " + args[5] + ", " + args[6] + ", " + args[7]);
+            console.log('sendImageMsg arg0:', args[0]);
+            console.log('sendImageMsg arg1:', args[1]);
+            console.log('sendImageMsg arg2:', readWideString(args[2]));
+            console.log('sendImageMsg arg3:', readWideString(args[3]));
+            console.log('sendImageMsg arg4:', args[4].readS32());
+
+        } catch (e: any) {
+            console.error('接收消息回调失败：', e)
+            throw new Error(e)
+        }
+    },
+})
 
 /*
 发送联系人名片
@@ -899,7 +1468,7 @@ const recvMsgNativeCallback = (() => {
 
                     // 调用处理函数
                     const msg = HandleSyncMsg(args[0], args[1], args[2]);
-                    console.log("msg: " + JSON.stringify(msg, null, 2));
+                    // console.log("msg: " + JSON.stringify(msg, null, 2));
                     let room = ''
                     let talkerId = ''
                     let listenerId = ''
@@ -907,6 +1476,7 @@ const recvMsgNativeCallback = (() => {
                     const signature = msg.signature
                     const msgType = msg.type
                     const isSelf = msg.isSelf
+                    let filename = ''
 
                     if (msg.fromUser.indexOf('@') !== -1) {
                         room = msg.fromUser
@@ -929,9 +1499,28 @@ const recvMsgNativeCallback = (() => {
                         }
                     }
 
+                    if (msgType === 3) {
+                        filename = JSON.parse(msg.content)[0]
+                    }
+
+                    if (msgType === 49) {
+                        const content = msg.content as string
+                        // <title>example_upsert.json</title>\n        <des></des>\n        <action>view</action>\n        <type>6</type>\n   
+                        // 使用正则提取出文件名和type
+                        const subType = content.match(/<type>(\d+)<\/type>/)
+                        if (subType && subType[1] === '6') {
+                            const filenames = content.match(/<title>(.*)<\/title>/)
+                            if (filenames) {
+                                const curTime = new Date()
+                                filename = `${selfInfo.id}\\FileStorage\\File\\${curTime.getFullYear()}-${curTime.getMonth() < 9 ? '0' : ''}${curTime.getMonth() + 1}\\${filenames[1]}`
+                                console.log('filename:', filename)
+                            }
+                        }
+                    }
+
                     const message: Message = {
                         id: msg.msgId,
-                        filename: msgType === 3 ? msg.content : '', // 只有在发送文件时需要
+                        filename, // 只有在发送文件时需要
                         text,
                         timestamp: msg.createTime,
                         type: msgType,
@@ -941,7 +1530,9 @@ const recvMsgNativeCallback = (() => {
                         listenerId, // 在一对一聊天中使用
                         isSelf,
                     }
-                    console.log('message:', JSON.stringify(message, null, 2))
+
+                    // console.log('message:', JSON.stringify(message, null, 2))
+
                     send(message)
                     const myContentPtr = Memory.alloc(text.length * 2 + 1)
                     myContentPtr.writeUtf16String(text)
@@ -1020,7 +1611,7 @@ function HandleSyncMsg(param1: NativePointer, param2: any, param3: any) {
     // 根据消息类型处理图片消息
     if (msg['type'] == 3) {
         const thumb = getStringByStrAddr(param2.add(0x280)) // 消息签名
-        console.log("msg.thumb: " + thumb);
+        // console.log("msg.thumb: " + thumb);
 
         const extra = getStringByStrAddr(param2.add(0x2A0)) // 消息签名
         // console.log("msg.extra: " + extra);
@@ -1037,19 +1628,19 @@ function HandleSyncMsg(param1: NativePointer, param2: any, param3: any) {
         ])
 
     }
-    console.log("HandleSyncMsg msg: " + JSON.stringify(msg, null, 2));
+    // console.log("HandleSyncMsg msg: " + JSON.stringify(msg, null, 2));
     return msg;
 }
 
 /*---------------------send&recv---------------------*/
-function onMessage(message: any) {
-    console.log("agent onMessage:", JSON.stringify(message, null, 2));
+// function onMessage(message: any) {
+//     console.log("agent onMessage:", JSON.stringify(message, null, 2));
 
-}
-recv(onMessage);
+// }
+// recv(onMessage);
 
-rpc.exports = {
-    callFunction: function (contactId: any, text: any) {
-        return messageSendText(contactId, text);
-    }
-};
+// rpc.exports = {
+//     callFunction: function (contactId: any, text: any) {
+//         return messageSendText(contactId, text);
+//     }
+// };

@@ -9,6 +9,117 @@ import websockets
 from threading import Thread
 import queue
 import json
+import time
+
+import os
+import binascii
+
+userpath = os.path.expanduser('~')
+# print('userpath:', userpath)
+rootpath =  userpath + '\\Documents\\WeChat Files\\'
+
+xor_cache = None
+xor_len = 2
+
+isStart = False
+
+def image_decrypt(data_path: str, message_id: str):
+    try:
+        with open(data_path, 'rb') as file:
+            data = file.read().hex()
+        res = handle_encrypted(data)  # 解密后的十六进制数据
+        extension = get_name_extension(res[:4])
+        image_info = {
+            'base64': binascii.b2a_base64(binascii.unhexlify(res)).decode().strip(),
+            'extension': extension,
+            'fileName': f'message-{message_id}-url-thumb.{extension}',
+        }
+        return image_info
+    except Exception as err:
+        print(err)
+        raise Exception('ImageDecrypt fail')
+
+def handle_encrypted(str_encrypted: str):
+    code = get_xor(str_encrypted[:4])
+    str_length = len(str_encrypted)
+    source = ''
+    list_ = []
+    for i in range(0, str_length, xor_len):
+        str_ = str_encrypted[:xor_len]
+        str_encrypted = str_encrypted[xor_len:]
+        res = hex_xor(str_, code)
+        list_.append(res)
+    source = ''.join(list_)
+    return source
+
+def get_xor(str_: str):
+    global xor_cache
+    if xor_cache is not None:
+        return xor_cache
+    str01 = str_[:2]
+    str23 = str_[2:]
+    for head in data_head:
+        h = head['hex']
+        h01 = h[:2]
+        h23 = h[2:]
+        code = hex_xor(h01, str01)
+        test_result = hex_xor(str23, code)
+        if test_result == h23:
+            xor_cache = code
+            return xor_cache
+    raise Exception('getXor error')
+
+def get_name_extension(hex_str: str):
+    for item in data_head:
+        if item['hex'] == hex_str:
+            return item['name']
+    return None
+
+def hex_to_bin(str_: str):
+    hex_array = {
+        '0': '0000', '1': '0001', '2': '0010', '3': '0011',
+        '4': '0100', '5': '0101', '6': '0110', '7': '0111',
+        '8': '1000', '9': '1001', 'a': '1010', 'b': '1011',
+        'c': '1100', 'd': '1101', 'e': '1110', 'f': '1111'
+    }
+    value = ''
+    for char in str_:
+        value += hex_array[char]
+    return value
+
+def bin_to_hex(str_: str):
+    hex_array = {
+        '0000': '0', '0001': '1', '0010': '2', '0011': '3',
+        '0100': '4', '0101': '5', '0110': '6', '0111': '7',
+        '1000': '8', '1001': '9', '1010': 'a', '1011': 'b',
+        '1100': 'c', '1101': 'd', '1110': 'e', '1111': 'f'
+    }
+    value = ''
+    list_ = [str_[i:i+4] for i in range(0, len(str_), 4)]
+    for item in list_:
+        value += hex_array[item]
+    return value
+
+def hex_xor(a: str, b: str):
+    A = hex_to_bin(a)
+    B = hex_to_bin(b)
+    d = ''
+    for i in range(len(A)):
+        if A[i] == B[i]:
+            d += '0'
+        else:
+            d += '1'
+    return bin_to_hex(d)
+
+data_head = [
+    {'hex': 'ffd8', 'name': 'jpg'},
+    {'hex': '8950', 'name': 'png'},
+    {'hex': '4749', 'name': 'gif'},
+    {'hex': '424d', 'name': 'bmp'},
+]
+
+# 示例调用
+# print(image_decrypt('path_to_image_file', 'message_id'))
 
 clients = set()  # 追踪所有连接的 WebSocket 客户端
 log_queue = queue.Queue()  # 创建一个线程安全的队列
@@ -62,6 +173,36 @@ def on_message(message, data):
                     'text': 'dong',
                     'contactId': contactId,
                 }})
+        type = message['payload']['type']
+        if type == 3:
+            log('内容是图片: ' + content)
+            # 延时500ms处理，等待图片文件写入完成
+            time.sleep(0.5)
+
+            filename = message['payload']['filename']
+            # 获取用户目录
+            filepath = rootpath + filename
+            print('filePath:', filepath)
+            try:
+                image_info = image_decrypt(filepath, message['payload']['id'])
+                # print('image_info:', image_info)
+                # 保存为图片文件
+                # 获取filepath路径文件所在的目录，将filepath文件解密后保存到该目录下
+                savepath = os.path.dirname(filepath)+'\\'+image_info['fileName']
+                print('savepath:', savepath)
+                with open(savepath, 'wb') as f:
+                    f.write(binascii.a2b_base64(image_info['base64']))
+                message['payload']['filename'] = savepath
+                log(f"图片消息: {json.dumps(message['payload'])}")
+
+            except Exception as e:
+                log(f"解密图片失败: {str(e)}")
+        if type == 49:
+            filename = message['payload']['filename']
+            filepath = rootpath + filename
+            print('filePath:', filepath)
+            message['payload']['filename'] = filepath
+            log(f"文件消息: {json.dumps(message['payload'])}")
         asyncio.run_coroutine_threadsafe(broadcast_message(message['payload']), loop)
 
 # 广播消息到所有 WebSocket 客户端
@@ -80,13 +221,18 @@ def start_script():
     try:
         log("尝试附加到 WeChat.exe 进程...")
         session = frida.attach("WeChat.exe")
-        script_path = resource_path("xp-3.9.10.27-lite.js")
+        script_path = resource_path("xp-3.9.10.27.js")
         with open(script_path, 'r', encoding="utf-8") as f:
             script_content = f.read()
         script = session.create_script(script_content)
         script.on("message", on_message)
         script.load()
         log("API服务加载成功...")
+        isStart = True
+        # 启动开关禁用，防止重复启动；停止开关激活
+        start_button.config(state=tk.DISABLED)
+        stop_button.config(state=tk.NORMAL)
+
     except Exception as e:
         log(f"错误: {str(e)}")
 
@@ -98,6 +244,10 @@ def stop_script():
             session.detach()
             session = None
             log("已从进程分离。")
+            isStart = False
+            # 启动开关激活；停止开关禁用，防止重复启动
+            start_button.config(state=tk.NORMAL)
+            stop_button.config(state=tk.DISABLED)
     except Exception as e:
         log(f"错误: {str(e)}")
 
@@ -141,7 +291,7 @@ frame = tk.Frame(root)
 frame.pack(pady=10, padx=10)
 
 # 创建启动 Frida 脚本的按钮
-start_button = tk.Button(frame, text="启动", command=start_script)
+start_button = tk.Button(frame, text="启动", command=start_script )
 start_button.pack(side=tk.LEFT, padx=5)
 
 # 创建停止 Frida 脚本的按钮
@@ -203,6 +353,7 @@ root.protocol("WM_DELETE_WINDOW", on_closing)
 # 启动Tkinter主循环
 async def run_tk():
     log("程序已启动")
+    start_script()
     while not stop_event.is_set():
         root.update()
         try:
