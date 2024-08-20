@@ -96,12 +96,12 @@ const offsets = {
     kNetSceneModifyContactLabel: 0x250C480,
     kSendMessageMgr: 0x1C1E690, // 3.9.10.27
     // const uint64_t kAppMsgMgr = 0x1C23630;
-    kAppMsgMgr: 0x1C23630,
+    kAppMsgMgr: 0x1C23630, // 3.9.10.27
     // const uint64_t kSendTextMsg = 0x238DDD0;
     // const uint64_t kSendImageMsg = 0x2383560;
-    kSendImageMsg: 0x2383560,
+    kSendImageMsg: 0x2383560, // 3.9.10.27
     // const uint64_t kSendFileMsg = 0x21969E0;
-    kSendFileMsg: 0x21969E0,
+    kSendFileMsg: 0x21969E0, // 3.9.10.27
     kSendPatMsg: 0x2D669B0, // 3.9.10.27
     // const uint64_t kFreeChatMsg = 0x1C1FF10;
     // const uint64_t kNewChatMsg = 0x1C28800;
