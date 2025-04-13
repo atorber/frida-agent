@@ -898,7 +898,7 @@ const sendPatMsg = (roomId: any, contactId: any) => {
   }
 }
 
-// sendPatMsg('21341182572@chatroom', 'tyutluyc')
+// sendPatMsg('21341182572@chatroom', 'ledongmao')
 
 // 调试：监听函数调用
 Interceptor.attach(

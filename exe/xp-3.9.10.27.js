@@ -776,7 +776,7 @@ const sendPatMsg = (roomId, contactId) => {
         console.error("SendPatMsg 调用失败: ", e);
     }
 };
-// sendPatMsg('21341182572@chatroom', 'tyutluyc')
+// sendPatMsg('21341182572@chatroom', 'ledongmao')
 // 调试：监听函数调用
 Interceptor.attach(moduleBaseAddress.add(offsets.kSendPatMsg), {
     onEnter(args) {

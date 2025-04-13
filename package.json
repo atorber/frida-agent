@@ -20,6 +20,8 @@
     "build:lite": "frida-compile agent/xp-3.9.10.27.ts -o dist/xp-3.9.10.27.js -c",
     "watch:dev": "frida-compile agent/dev.ts -o agent/dev.js -w",
     "start:dev": "frida -l agent/dev.js WeChat.exe",
+    "watch:wx391027": "frida-compile agent/wx391027/index.ts -o agent/wx391027/index.js -w",
+    "start:wx391027": "frida -l agent/wx391027/index.js WeChat.exe",
     "start:inject": "frida -l examples/inject.js WeChat.exe"
   },
   "devDependencies": {
@@ -32,7 +34,7 @@
   },
   "dependencies": {
     "@frida/net": "^4.0.2",
-    "frida": "^16.3.3",
+    "frida": "^16.7.10",
     "http-parser-js": "^0.5.8",
     "koa": "^2.7.0",
     "koa-router": "^7.4.0",

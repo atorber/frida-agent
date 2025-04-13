@@ -1,0 +1,434 @@
+import {
+    writeWStringPtr,
+    readWStringPtr,
+    ReadSKBuiltinString,
+    ReadWeChatStr,
+    WeChatMessage,
+    hasPath,
+    uint8ArrayToString,
+    stringToUint8Array,
+    readAll,
+    findIamgePathAddr,
+    readString,
+    readWideString,
+    readStringPtr,
+    getStringByStrAddr,
+    initStruct,
+    initidStruct,
+    initmsgStruct,
+    parseContact
+} from './utils.js'
+
+import {
+    Contact,
+    Message,
+} from './types.js'
+
+const offsets = {
+    kGetContactMgr: 0x1C0BDE0, // done
+    kGetContactList: 0x2265540, // done
+    // const uint64_t kChatRoomMgr = 0x1C4E200;
+    kChatRoomMgr: 0x1C4E200,
+    kChatRoomInfoConstructor: 0x25CF470, // 3.9.10.27
+    kGetChatRoomDetailInfo: 0x222BEA0, // 3.9.10.27
+    kModChatRoomTopic: 0x2364610, // 3.9.10.27
+    kOpLogMgr: 0x1C193C0,
+    kAddChatroomMember: 0x221B8A0,
+    kDelChatroomMember: 0x221BEE0,
+    kInviteChatroomMember: 0x221B280,
+}
+
+const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
+
+/*
+获取群列表
+*/
+export function roomList() {
+    // 使用NativeFunction调用相关函数
+    const getContactMgrInstance = new NativeFunction(
+        moduleBaseAddress.add(offsets.kGetContactMgr),
+        'pointer', []
+    );
+    const getContactListFunction = new NativeFunction(
+        moduleBaseAddress.add(offsets.kGetContactList),
+        'int64', ['pointer', 'pointer']
+    );
+
+    // 获取联系人管理器的实例
+    const contactMgrInstance = getContactMgrInstance();
+
+    // 准备用于存储联系人信息的数组
+    const contacts: Contact[] = [];
+    const contactVecPlaceholder: any = Memory.alloc(Process.pointerSize * 3);
+    contactVecPlaceholder.writePointer(ptr(0));  // 初始化指针数组
+
+    const success = getContactListFunction(contactMgrInstance, contactVecPlaceholder);
+    const contactVecPtr = contactVecPlaceholder.readU32();
+
+    // 解析联系人信息
+    if (success) {
+        const contactPtr = contactVecPlaceholder;
+        let start = contactPtr.readPointer();
+        const end = contactPtr.add(Process.pointerSize * 2).readPointer();
+
+        const CONTACT_SIZE = 0x6A8; // 假设每个联系人数据结构的大小
+
+        while (start.compare(end) < 0) {
+            try {
+                // console.log('start:', start)
+                const contact = parseContact(start);
+                // console.log('contact:', JSON.stringify(contact, null, 2))
+                if (contact.id && (contact.id.endsWith('chatroom'))) {
+                    contacts.push(contact);
+                }
+            } catch (error) {
+                console.log('contactList() error:', error)
+            }
+            start = start.add(CONTACT_SIZE);
+        }
+    }
+    return contacts;
+};
+
+/*
+获取群详情
+*/
+export function roomRawPayload(roomId: string) {
+    let success = -1;
+    let instanceAddr = moduleBaseAddress.add(offsets.kChatRoomMgr);
+    let constructorAddr = moduleBaseAddress.add(offsets.kChatRoomInfoConstructor);
+    let getChatRoomDetailInfoAddr = moduleBaseAddress.add(offsets.kGetChatRoomDetailInfo);
+
+    let instance = new NativeFunction(instanceAddr, 'pointer', []);
+    let constructor = new NativeFunction(constructorAddr, 'pointer', ['pointer']);
+    let getChatRoomDetailInfo = new NativeFunction(getChatRoomDetailInfoAddr, 'uint8', ['pointer', 'pointer', 'pointer', 'int']);
+
+    let roomIdStr = writeWStringPtr(roomId);
+    let buff = Memory.alloc(0x148);
+
+    // 调用constructor创建ChatRoomInfoBuf
+    let chatRoomInfoBuf = constructor(buff);
+    const instancePtr = instance();
+
+    console.log('instancePtr:', instancePtr)
+
+    // 调用GetChatRoomDetailInfo
+    success = getChatRoomDetailInfo(instancePtr, roomIdStr, chatRoomInfoBuf, 1);
+
+    let info = {};
+    if (success === 1) {
+        info = {
+            id: readWideString(chatRoomInfoBuf.add(0x8)),
+            notice: readWideString(chatRoomInfoBuf.add(0x28)),
+            admin: readWideString(chatRoomInfoBuf.add(0x48)),
+            xml: readWideString(chatRoomInfoBuf.add(0x78)),
+        };
+        // console.log('获取到的聊天室详情信息:', JSON.stringify(info, null, 2));
+    } else {
+        console.error('获取聊天室详情信息失败');
+    }
+    return info;
+};
+
+/*
+从群里删除成员
+*/
+export async function roomDel(
+    roomId: string,
+    contactId: string,
+) {
+    console.log('roomDel:', roomId, contactId)
+    // 调用DelChatroomMember函数
+    const getChatRoomMgrAddr = moduleBaseAddress.add(offsets.kChatRoomMgr);
+    const delChatroomMemberAddr = moduleBaseAddress.add(offsets.kDelChatroomMember);
+    
+    // 定义函数接口
+    const GetChatRoomMgr = new NativeFunction(getChatRoomMgrAddr, 'pointer', []);
+    const DelChatroomMember = new NativeFunction(delChatroomMemberAddr, 'int', ['pointer', 'pointer', 'pointer']);
+    
+    // 创建roomId的WxString
+    const roomIdStr = writeWStringPtr(roomId);
+    
+    // 处理成员ID - 按照C++实现，支持多个ID用逗号分隔
+    // 创建成员矢量结构
+    const memberIds = contactId.split(',');
+    
+    // 为存储成员指针创建数组
+    const ptrSize = Process.pointerSize;
+    const memberPtrs = Memory.alloc(ptrSize * memberIds.length);
+    
+    // 创建每个成员ID的WxString并保存
+    for (let i = 0; i < memberIds.length; i++) {
+        const wxid = memberIds[i].trim();
+        if (wxid) {
+            const wxidPtr = writeWStringPtr(wxid);
+            memberPtrs.add(i * ptrSize).writePointer(wxidPtr);
+        }
+    }
+    
+    // 创建正确的Vector结构
+    const vMembers = Memory.alloc(ptrSize * 3); // 为向量分配内存
+    vMembers.writePointer(memberPtrs); // 起始指针
+    vMembers.add(ptrSize).writePointer(memberPtrs.add(ptrSize * memberIds.length)); // 结束指针
+    vMembers.add(ptrSize * 2).writePointer(ptr('0')); // 容量指针
+    
+    // 获取聊天室管理器实例
+    const mgrPtr = GetChatRoomMgr();
+    console.log('mgrPtr:', mgrPtr);
+    
+    // 调用删除成员函数
+    const status = DelChatroomMember(mgrPtr, vMembers, roomIdStr);
+    
+    console.log('从群删除成员结果:', status);
+    
+    return status === 1;
+}
+
+/*
+获取群头像
+*/
+export async function roomAvatar(roomId: string) {
+    // 实现获取群头像的功能
+    // 这里可能需要调用WeChatWin.dll中的相关函数
+    console.log('获取群头像, roomId:', roomId);
+    return '';
+}
+
+/*
+添加成员到群
+*/
+export function roomAdd(
+    roomId: string,
+    wxids: string,
+): boolean {
+    try {
+        // 参数检查
+        if (!roomId || !wxids) {
+            console.error("房间ID或微信ID为空");
+            return false;
+        }
+
+        // 调用AddChatroomMember函数
+        const getChatRoomMgrAddr = moduleBaseAddress.add(offsets.kChatRoomMgr);
+        const addChatroomMemberAddr = moduleBaseAddress.add(offsets.kAddChatroomMember);
+        
+        // 定义函数接口
+        const GetChatRoomMgr = new NativeFunction(getChatRoomMgrAddr, 'pointer', []);
+        const AddChatroomMember = new NativeFunction(addChatroomMemberAddr, 'int', ['pointer', 'pointer', 'pointer', 'pointer']);
+        
+        console.log('准备调用AddChatroomMember:');
+        console.log('- roomId:', roomId);
+        console.log('- wxids:', wxids);
+
+        // 获取聊天室管理器实例
+        const mgrPtr = GetChatRoomMgr();
+        if (!mgrPtr || mgrPtr.isNull()) {
+            console.error('获取聊天室管理器失败');
+            return false;
+        }
+        
+        // 1. 创建roomId的WxString
+        const roomIdStr = writeWStringPtr(roomId);
+        
+        // 2. 创建临时数组
+        const temp = Memory.alloc(Process.pointerSize * 2);
+        temp.writeU64(0);
+        temp.add(Process.pointerSize).writeU64(0);
+        
+        // 3. 使用单个成员ID并创建WxString
+        // 创建wxid结构
+        const wxidStr = writeWStringPtr(wxids);
+        
+        // 直接调用函数，使用最简单的方式（只处理单个成员情况）
+        // 注意参数顺序：mgr, wxidVector, roomIdStr, temp
+        const status = AddChatroomMember(mgrPtr, wxidStr, roomIdStr, temp);
+        
+        console.log('添加成员到群结果:', status);
+        
+        return status === 1;
+    } catch (error) {
+        console.error('添加成员到群出错:', error);
+        return false;
+    }
+}
+
+/*
+邀请成员进群
+*/
+export function roomInvite(
+    roomId: string,
+    wxids: string,
+): boolean {
+    try {
+        // 参数检查
+        if (!roomId || !wxids) {
+            console.error("房间ID或微信ID为空");
+            return false;
+        }
+
+        // 获取邀请成员函数地址
+        const inviteChatroomMemberAddr = moduleBaseAddress.add(offsets.kInviteChatroomMember);
+        
+        // 定义函数接口 - 参照C++实现
+        const InviteChatroomMember = new NativeFunction(inviteChatroomMemberAddr, 'int', ['pointer', 'pointer', 'pointer', 'pointer']);
+        
+        console.log('准备调用InviteChatroomMember:');
+        console.log('- roomId:', roomId);
+        console.log('- wxids:', wxids);
+        
+        // 简化实现 - 不尝试创建复杂的向量结构
+        // 创建roomId字符串
+        const wsRoomIdStr = Memory.allocUtf16String(roomId);
+        
+        // 创建简单的wxid字符串
+        const wxidStr = Memory.allocUtf16String(wxids);
+        
+        // 创建一个简单的WxString结构
+        const wxidWxStr = Memory.alloc(Process.pointerSize * 3);
+        wxidWxStr.writePointer(wxidStr);
+        wxidWxStr.add(Process.pointerSize).writeU32(wxids.length);
+        wxidWxStr.add(Process.pointerSize + 4).writeU32(wxids.length * 2);
+        
+        // 创建roomId的WxString
+        const wxRoomId = Memory.alloc(Process.pointerSize * 3);
+        wxRoomId.writePointer(wsRoomIdStr);
+        wxRoomId.add(Process.pointerSize).writeU32(roomId.length);
+        wxRoomId.add(Process.pointerSize + 4).writeU32(roomId.length * 2);
+        
+        // 准备临时数组
+        const temp = Memory.alloc(Process.pointerSize * 2);
+        temp.writeU64(0);
+        temp.add(Process.pointerSize).writeU64(0);
+        
+        // 调用邀请成员函数 - 使用最简单的方法避免内存问题
+        const status = InviteChatroomMember(wsRoomIdStr, wxidWxStr, wxRoomId, temp);
+        
+        console.log('邀请成员进群结果:', status);
+        
+        return status === 1;
+    } catch (error) {
+        console.error('邀请成员进群出错:', error);
+        return false;
+    }
+}
+
+/*
+设置群名称 3.9.10.27 未完成
+*/
+export async function roomTopic(roomId: string, topic: string) {
+    let result: any = -1;
+    // 计算instance函数和ModChatRoomTopic函数的地址
+    var instanceAddr = moduleBaseAddress.add(offsets.kOpLogMgr);
+    var modChatRoomTopicAddr = moduleBaseAddress.add(offsets.kModChatRoomTopic);
+
+    // 定义这两个函数
+    var Instance = new NativeFunction(instanceAddr, 'pointer', []);
+    var ModChatRoomTopic = new NativeFunction(modChatRoomTopicAddr, 'uint64', ['pointer', 'pointer', 'pointer']);
+
+    const instancePtr = Instance();
+    console.log('instancePtr:', instancePtr)
+
+    // 创建roomIdStr和topicStr的内存表示
+    var roomIdStrPtr = writeWStringPtr(roomId);
+    var topicStrPtr = writeWStringPtr(topic);
+
+    console.log('roomId:', readWStringPtr(roomIdStrPtr).readUtf16String());
+    console.log('topic:', readWStringPtr(topicStrPtr).readUtf16String());
+
+    // 调用ModChatRoomTopic
+    // result = ModChatRoomTopic(instancePtr, roomIdStrPtr, topicStrPtr);
+    console.log("ModChatRoomTopic result:", result);
+
+    return result;
+}
+
+/*
+创建群
+*/
+export async function roomCreate(
+    contactIdList: string[],
+    topic: string,
+) {
+    // 实现创建群聊的功能
+    console.log('创建群聊，成员:', contactIdList, '主题:', topic);
+    
+    // 这里需要调用WeChatWin.dll中的相关函数创建群聊
+    // 暂时返回模拟数据
+    return 'mock_room_id';
+}
+
+/*
+退出群
+*/
+export async function roomQuit(roomId: string): Promise<boolean> {
+    // 调用DelChatroomMember函数，传入自己的wxid来退出群
+    const getMySelfInfoAddr = moduleBaseAddress.add(offsets.kGetContactMgr); // 使用获取联系人管理器来获取自己的信息
+    const GetMySelfInfo = new NativeFunction(getMySelfInfoAddr, 'pointer', []);
+    
+    // 获取自己的wxid
+    const mySelfInfo = GetMySelfInfo();
+    if (!mySelfInfo) {
+        console.error('获取自己的信息失败');
+        return false;
+    }
+    
+    // 假设我们能够从mySelfInfo获取到自己的wxid
+    // 这里需要根据实际情况调整获取wxid的方法
+    const myWxid = "self_wxid"; // 这里需要替换成实际获取wxid的方法
+    
+    // 调用roomDel方法删除自己
+    const result = await roomDel(roomId, myWxid);
+    
+    return result;
+}
+
+/*
+获取群二维码
+*/
+export async function roomQRCode(roomId: string): Promise<string> {
+    console.log('获取群二维码, roomId:', roomId);
+    // 实现获取群二维码的功能
+    return roomId + ' mock qrcode';
+}
+
+/*
+获取群成员列表
+*/
+export async function roomMemberList(roomId: string) {
+    console.log('获取群成员列表, roomId:', roomId);
+    // 实现获取群成员列表的功能
+    // 这里可能需要获取群详情，然后解析成员信息
+    
+    // 先获取群详情
+    const roomInfo = roomRawPayload(roomId);
+    // 从群详情中解析成员列表
+    // 暂时返回空数组
+    return [];
+}
+
+/*
+获取群成员详情
+*/
+export async function roomMemberRawPayload(roomId: string, contactId: string) {
+    console.log('获取群成员详情, roomId:', roomId, 'contactId:', contactId);
+    // 实现获取群成员详情的功能
+    
+    // 暂时返回空对象
+    return {};
+}
+
+/*
+设置群公告
+*/
+export async function roomAnnounce(roomId: string, text?: string): Promise<void | string> {
+    console.log('设置群公告, roomId:', roomId, 'text:', text);
+    
+    if (text) {
+        // 设置群公告
+        // 这里需要调用WeChatWin.dll中的相关函数设置群公告
+        return;
+    }
+    
+    // 获取群公告
+    return 'mock announcement for ' + roomId;
+}

@@ -4,3 +4,4 @@ _xp.js
 agent/*.js
 /.vscode
 exe/dist
+package-lock.json
