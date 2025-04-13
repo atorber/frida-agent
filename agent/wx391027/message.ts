@@ -64,18 +64,27 @@ const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 发送文本消息 3.9.10.27
 */ 
 export const messageSendText = (contactId: string, text: string, atWxids?: string[]): number => {
+    console.log('messageSendText 开始执行:', { contactId, text, atWxids });
     try {
         const send_message_mgr_addr = moduleBaseAddress.add(offsets.kSendMessageMgr);
         const send_text_msg_addr = moduleBaseAddress.add(offsets.kSendTextMsg);
         const free_chat_msg_addr = moduleBaseAddress.add(offsets.kFreeChatMsg);
 
+        console.log('函数地址:', {
+            send_message_mgr_addr,
+            send_text_msg_addr,
+            free_chat_msg_addr
+        });
+
         // 分配内存并初始化
         const chat_msg = Memory.alloc(0x460);
         chat_msg.writeByteArray(Array(0x460).fill(0));
+        console.log('消息缓冲区地址:', chat_msg);
 
         // 检查是否需要@人，如果需要且在群聊中，需要在文本前添加@用户
         let msgText = text;
         if (contactId.includes('@chatroom') && atWxids && atWxids.length > 0) {
+            console.log('处理@消息，群聊ID:', contactId);
             for (const wxid of atWxids) {
                 if (wxid === 'notify@all') {
                     // 特殊处理@所有人
@@ -101,16 +110,22 @@ export const messageSendText = (contactId: string, text: string, atWxids?: strin
             throw new Error('Failed to create string pointers');
         }
 
+        console.log('字符串指针:', {
+            to_user,
+            text_msg
+        });
+
         // 处理@消息
         let wxAters: NativePointer;
         if (atWxids && atWxids.length > 0) {
-            console.log('atWxids:', atWxids);
+            console.log('处理@列表:', atWxids);
             // 创建WxString数组
             const wxStrings: NativePointer[] = [];
             for (const wxid of atWxids) {
                 const wxStringPtr = writeWStringPtr(wxid);
                 if (wxStringPtr && !wxStringPtr.isNull()) {
                     wxStrings.push(wxStringPtr);
+                    console.log('添加@用户:', wxid, '指针:', wxStringPtr);
                 }
             }
 
@@ -126,6 +141,7 @@ export const messageSendText = (contactId: string, text: string, atWxids?: strin
             // 写入WxString指针
             for (let i = 0; i < wxStrings.length; i++) {
                 start.add(Process.pointerSize * i).writePointer(wxStrings[i]);
+                console.log('写入@用户指针:', i, wxStrings[i]);
             }
 
             // 设置RawVector的字段
@@ -134,7 +150,11 @@ export const messageSendText = (contactId: string, text: string, atWxids?: strin
             rawVector.add(Process.pointerSize * 2).writePointer(start.add(Process.pointerSize * wxStrings.length)); // end
 
             wxAters = rawVector;
-            console.log('wxAters:', wxAters);
+            console.log('RawVector结构:', {
+                start: rawVector.readPointer(),
+                finish: rawVector.add(Process.pointerSize).readPointer(),
+                end: rawVector.add(Process.pointerSize * 2).readPointer()
+            });
         } else {
             // 创建空的WxString
             const emptyWxString = writeWStringPtr('');
@@ -151,24 +171,31 @@ export const messageSendText = (contactId: string, text: string, atWxids?: strin
             rawVector.add(Process.pointerSize * 3).writePointer(start.add(Process.pointerSize));
 
             wxAters = rawVector;
+            console.log('创建空的RawVector结构');
         }
 
         if (!wxAters || wxAters.isNull()) {
             throw new Error('Failed to create wxAters');
         }
 
-        // console.log('wxAters:', wxAters);
-
         // 创建NativeFunction对象
         const mgr = new NativeFunction(send_message_mgr_addr, 'void', []);
         const send = new NativeFunction(send_text_msg_addr, 'uint64', ['pointer', 'pointer', 'pointer', 'pointer', 'int32', 'int32', 'int32', 'int32']);
         const free = new NativeFunction(free_chat_msg_addr, 'void', ['pointer']);
 
-        // 调用发送消息管理器初始化
+        console.log('调用发送消息管理器初始化');
         mgr();
 
+        console.log('发送文本消息，参数:', {
+            chat_msg,
+            to_user,
+            text_msg,
+            wxAters: wxAters.readPointer()
+        });
+
         // 发送文本消息
-        const success = send(chat_msg, to_user, text_msg, wxAters, 1, 1, 0, 0);
+        const success = send(chat_msg, to_user, text_msg, wxAters.readPointer(), 1, 1, 0, 0);
+        console.log('发送结果:', success);
 
         // 释放内存
         free(chat_msg);

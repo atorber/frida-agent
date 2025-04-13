@@ -129,7 +129,7 @@ log('wxid', 'wxid:', wxid)
 // messageSendText('21341182572@chatroom', `hello world ${new Date().toLocaleString()}`, ['notify@all'])
 // messageSendText('21341182572@chatroom', 'hello world all', ['notify@all'])
 // messageSendText('21341182572@chatroom', 'hello world', ['ledongmao', 'wxid_pnza7m7kf9tq12'])
-// messageSendText('21341182572@chatroom', 'hello world', ['ledongmao'])
+// messageSendText('21341182572@chatroom', `hello world ${Math.random().toString(4).substring(2, 4)} ${new Date().toLocaleString()}`, ['tyutluyc'])
 // messageSendText('21341182572@chatroom', `hello world ${Math.random().toString(4).substring(2, 4)} ${new Date().toLocaleString()}`, ['ledongmao'])
 
 const path = 'C:\\GitHub\\frida-agent\\agent\\1.jpg'
@@ -141,7 +141,7 @@ const path = 'C:\\GitHub\\frida-agent\\agent\\1.jpg'
 
 // roomAdd('25172281579@chatroom', 'ledongmao')
 // roomInvite('25172281579@chatroom', 'ledongmao')
-// messageSendText('25172281579@chatroom', 'hello world')
+messageSendText('25172281579@chatroom', 'hello world',['notify@all'])
 
 // roomDel('21341182572@chatroom', 'ledongmao')
 // messageSendText('21341182572@chatroom', 'hello world')
