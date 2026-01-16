@@ -2,11 +2,19 @@
   "compilerOptions": {
     "target": "es2020",
     "lib": ["es2020"],
+    "types": [],
     "allowJs": true,
     "noEmit": true,
     "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "typeRoots": ["./node_modules/@types", "./types"]
-  }
+    "typeRoots": [
+      "./node_modules/@types",
+      "./agent/node_modules/@types",
+      "./types"
+    ]
+  },
+  "include": [
+    "types/global.d.ts"
+  ]
 }

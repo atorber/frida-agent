@@ -1,7 +1,36 @@
-/_agent.js
+# Node.js
 /node_modules
-_xp.js
-agent/*.js
-/.vscode
-exe/dist
 package-lock.json
+
+# 编译输出
+/dist/
+agent/**/*.js
+!agent/**/test.js
+
+# 旧文件
+/_agent.js
+_xp.js
+
+# IDE
+/.vscode
+/.idea
+
+# 构建产物
+exe/dist
+weebot/dist/
+weebot/build/
+
+# 测试文件（可选，如果需要提交测试脚本可以注释掉）
+# tests/*.py
+# tests/*.js
+# tests/*.ps1
+
+# 临时文件
+*.log
+*.tmp
+*.swp
+*~
+.DS_Store
+*/node_modules
+client/node_modules
+agent/node_modules

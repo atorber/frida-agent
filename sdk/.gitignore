@@ -1,0 +1,15 @@
+# 编译输出
+dist/
+*.js.map
+
+# 依赖
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# 日志
+*.log

@@ -1,3 +1,6 @@
+/// <reference types="frida-gum" />
+/// <reference path="../../types/global.d.ts" />
+
 import { offsets, offsetVariants } from './offset.js'
 import { getDbHandles, execDbQuery } from './sqlite.js';
 

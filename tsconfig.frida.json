@@ -1,7 +1,8 @@
 {
   "compilerOptions": {
     "target": "es2020",
-    "lib": ["es2020"],
+    "lib": ["es2020", "dom"],
+    "types": ["frida-gum"],
     "allowJs": true,
     "noEmit": true,
     "strict": false,
@@ -9,10 +10,12 @@
     "skipLibCheck": true,
     "typeRoots": [
       "./node_modules/@types",
+      "./agent/node_modules/@types",
       "./types"
     ]
   },
   "include": [
+    "types/global.d.ts",
     "agent/**/*.ts"
   ],
   "exclude": [

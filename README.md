@@ -1,154 +1,112 @@
-# Frida-Agent for WeChat
+# Frida Agent for WeChat
 
-[![Node.js](https://img.shields.io/badge/Node.js-18.x-green.svg)](https://nodejs.org/)
-[![Frida](https://img.shields.io/badge/Frida-16.x-orange.svg)](https://frida.re/)
-[![WeChat](https://img.shields.io/badge/WeChat-3.9.10.27-blue.svg)](https://pc.weixin.qq.com/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+基于 Frida 的微信自动化工具，支持微信 3.9.10.27 版本。
 
-基于 Frida 动态插桩框架的微信 Windows 客户端自动化工具。
+## 功能特性
 
-## ✨ 功能特性
+- ✅ 查询登录状态
+- ✅ 获取联系人列表和详情
+- ✅ 获取群列表和详情
+- ✅ 发送文本、图片、文件消息
+- ✅ 支持 @ 消息和拍一拍
+- ✅ 消息转发
+- ✅ 接收消息推送（支持回调）
+- ✅ 数据库查询
+- ✅ HTTP API 接口
 
-| 功能 | 描述 | 状态 |
-|------|------|------|
-| 🔐 登录管理 | 检查登录状态、获取用户信息 | ✅ |
-| 👥 联系人管理 | 获取联系人列表、查询联系人详情 | ✅ |
-| 💬 群聊管理 | 获取群列表、添加/删除群成员 | ✅ |
-| 📨 发送消息 | 文本、图片、文件、拍一拍 | ✅ |
-| 🎯 @功能 | 在群聊中@指定用户或@所有人 | 🔄 |
-| 📰 朋友圈 | 刷新朋友圈、获取动态 | ✅ |
-| 🗄️ 数据库 | 直接查询微信SQLite数据库 | ✅ |
-| 🎣 消息Hook | 实时接收消息回调 | ✅ |
+详细功能清单请查看 [agent/wx391027/README.md](./agent/wx391027/README.md)
 
-## 🚀 快速开始
+## 快速开始
 
-### 环境要求
-
-- Windows 10/11 (64位)
-- Node.js 18.x+
-- Python 3.8+ (用于 Frida)
-- 微信 Windows 3.9.10.27
-
-### 安装
+### 1. 安装依赖
 
 ```bash
-# 克隆项目
-git clone https://github.com/your-repo/frida-agent.git
-cd frida-agent
-
-# 安装依赖
 npm install
-
-# 安装 Frida CLI
-pip install frida-tools
 ```
 
-### 运行
+### 2. 编译脚本
 
 ```bash
-# 1. 启动微信并登录
+npm run build
+```
 
-# 2. 编译 TypeScript (开发模式)
-npm run watch:wx391027
+或者：
 
-# 3. 在另一个终端注入到微信
+```bash
+frida-compile agent/wx391027/index.ts -o dist/agent/wx391027/index.js -c
+```
+
+### 3. 启动微信并加载脚本
+
+```bash
 npm run start:wx391027
 ```
 
-## 📖 使用示例
+或者：
 
-### 发送文本消息
-
-```typescript
-import { messageSendText } from './message.js'
-
-// 发送普通消息
-messageSendText('wxid_xxx', 'Hello World')
-
-// 在群聊中@用户
-messageSendText('xxx@chatroom', 'Hello', ['wxid_user1'])
-
-// @所有人
-messageSendText('xxx@chatroom', 'Hello everyone', ['notify@all'])
+```bash
+frida -l dist/agent/wx391027/index.js WeChat.exe
 ```
 
-### 获取联系人列表
+### 4. 测试 API
 
-```typescript
-import { contactList } from './contact.js'
+脚本加载成功后，HTTP 服务器会在 `http://localhost:19088` 启动。
 
-const contacts = contactList()
-console.log(`共有 ${contacts.length} 个联系人`)
+```bash
+# 检查服务器状态
+curl http://localhost:19088/api/health
+
+# 检查登录状态
+curl http://localhost:19088/api/checkLogin
+
+# 获取联系人列表
+curl http://localhost:19088/api/contacts
 ```
 
-### 查询数据库
+## 项目结构
 
-```typescript
-import { execDbQuery } from './sqlite.js'
-
-const sql = 'SELECT UserName, NickName FROM Contact LIMIT 10'
-const results = execDbQuery('MicroMsg.db', sql)
-console.log(results)
-```
-
-## 📁 项目结构
+详细的项目结构请查看 [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md)
 
 ```
 frida-agent/
-├── agent/                      # 核心代理代码
-│   └── wx391027/              # 微信 3.9.10.27 版本模块
-│       ├── index.ts           # 主入口
-│       ├── login.ts           # 登录功能
-│       ├── contact.ts         # 联系人管理
-│       ├── room.ts            # 群聊管理
-│       ├── message.ts         # 消息功能
-│       ├── sqlite.ts          # 数据库操作
-│       └── utils.ts           # 工具函数
-├── docs/                       # 文档
-│   └── wiki.md                # 详细Wiki文档
-├── examples/                   # 示例代码
-├── nodejs/                     # Node.js 客户端
-├── python/                     # Python 客户端
-└── wcf/                        # WeChatFerry 参考代码
+├── agent/              # Frida Agent 源代码
+│   └── wx391027/      # 微信 3.9.10.27 版本实现
+├── dist/              # 编译输出
+├── tests/             # 测试脚本
+├── docs/              # 文档
+└── examples/          # 示例代码
 ```
 
-## 📚 文档
+## 文档
 
-详细文档请查看 [Wiki](docs/wiki.md)
+- [启动指南](./docs/START.md)
+- [API 参考文档](./docs/api-reference.md)
+- [Wiki](./docs/wiki.md)
+- [项目结构说明](./PROJECT_STRUCTURE.md)
+- [回调测试说明](./tests/README_CALLBACK_TEST.md)
 
-- [API 参考](docs/wiki.md#api参考)
-- [偏移地址说明](docs/wiki.md#偏移地址说明)
-- [常见问题](docs/wiki.md#常见问题)
-- [开发指南](docs/wiki.md#开发指南)
+## 开发
 
-## 🔧 NPM Scripts
+### 开发模式（自动重新编译）
 
-| 命令 | 描述 |
-|------|------|
-| `npm run build` | 编译生产版本 |
-| `npm run watch:wx391027` | 开发模式编译 (监听文件变化) |
-| `npm run start:wx391027` | 注入到微信进程 |
-| `npm run watch:dev` | 开发测试模式 |
+```bash
+npm run watch:wx391027
+```
 
-## ⚠️ 免责声明
+### 运行测试
 
-本项目仅供学习研究使用，请勿用于非法用途。使用本工具所产生的一切后果由使用者自行承担。
+```bash
+# 启动回调测试服务器
+python tests/test_callback_server.py
 
-## 🤝 贡献
+# 运行 API 测试
+python tests/test_api.py
+```
+
+## 许可证
+
+[LICENSE](./LICENSE)
+
+## 贡献
 
 欢迎提交 Issue 和 Pull Request！
-
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
-
-## 📄 许可证
-
-[MIT License](LICENSE)
-
-## 🙏 致谢
-
-- [Frida](https://frida.re/) - 动态插桩框架
-- [WeChatFerry](https://github.com/lich0821/WeChatFerry) - 参考实现

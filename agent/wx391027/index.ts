@@ -82,6 +82,17 @@ let selfInfo: any = {}
 let homePath = ''
 let wxid = ''
 
+// 消息推送配置
+interface PushConfig {
+    enabled: boolean;
+    callbackUrl: string;
+}
+
+let pushConfig: PushConfig = {
+    enabled: false,
+    callbackUrl: ''
+}
+
 // 初始化函数，延迟执行
 function initializeUserInfo() {
     try {
@@ -299,6 +310,85 @@ function initializeMessageHook() {
     }
 }
 
+// 发送消息推送
+function sendMessagePush(msg: Message) {
+    if (!pushConfig.enabled || !pushConfig.callbackUrl) {
+        return;
+    }
+
+    try {
+        // 解析回调 URL
+        const url = pushConfig.callbackUrl;
+        const urlMatch = url.match(/^(https?):\/\/([^\/]+)(\/.*)?$/);
+        if (!urlMatch) {
+            console.error(`[PUSH] [${new Date().toISOString()}] 无效的回调地址: ${url}`);
+            return;
+        }
+
+        const protocol = urlMatch[1];
+        const hostPort = urlMatch[2];
+        const path = urlMatch[3] || '/';
+
+        const [host, portStr] = hostPort.split(':');
+        const port = portStr ? parseInt(portStr, 10) : (protocol === 'https' ? 443 : 80);
+
+        // 创建 HTTP 请求数据
+        const requestBody = JSON.stringify(msg);
+        const bodyBytes = stringToUint8Array(requestBody);
+        
+        const requestText = 
+            `POST ${path} HTTP/1.1\r\n` +
+            `Host: ${hostPort}\r\n` +
+            `Content-Type: application/json; charset=utf-8\r\n` +
+            `Content-Length: ${bodyBytes.byteLength}\r\n` +
+            `\r\n` +
+            requestBody;
+
+        // 创建 TCP 连接并发送请求
+        const socket = net.connect({
+            host: host,
+            port: port
+        }, () => {
+            console.log(`[PUSH] [${new Date().toISOString()}] 连接到推送服务器: ${host}:${port}`);
+            socket.write(requestText);
+        });
+
+        let responseReceived = false;
+        socket.on('data', (data: any) => {
+            // 接收响应（可选，用于调试）
+            if (!responseReceived) {
+                responseReceived = true;
+                const responseText = typeof data === 'string' ? data : uint8ArrayToString(new Uint8Array(data));
+                console.log(`[PUSH] [${new Date().toISOString()}] 推送响应:`, responseText.substring(0, 200));
+                socket.end();
+            }
+        });
+
+        socket.on('error', (err: any) => {
+            console.error(`[PUSH] [${new Date().toISOString()}] 推送失败:`, err.message || String(err));
+        });
+
+        socket.on('close', () => {
+            // 连接关闭
+        });
+
+        // 设置超时（5秒）
+        setTimeout(() => {
+            if (!responseReceived) {
+                try {
+                    socket.destroy();
+                } catch (e) {
+                    // 忽略销毁错误
+                }
+                console.error(`[PUSH] [${new Date().toISOString()}] 推送超时`);
+            }
+        }, 5000);
+
+    } catch (e: any) {
+        console.error(`[PUSH] [${new Date().toISOString()}] 推送异常:`, e.message || String(e));
+    }
+}
+
 const handleMsg = (msg: Message) => {
     console.log('handleMsg:', JSON.stringify(msg, null, 2))
     const id = msg.id
@@ -309,6 +399,12 @@ const handleMsg = (msg: Message) => {
     const talkerId = msg.talkerId
     const listenerId = msg.listenerId
     const text = msg.text
+    
+    // 发送消息推送
+    if (pushConfig.enabled) {
+        sendMessagePush(msg);
+    }
+    
     if (msg.type === 3) {
         const filename = `C:\\GitHub\\frida-agent\\agent\\${id}.jpg`
         // 等待5s
@@ -854,6 +950,71 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                 res.msg = '方法错误: 需要使用 POST';
             }
         } 
+        else if (path === '/api/push/config') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) {
+                        body = JSON.parse(req.body);
+                    }
+                } catch (e: any) {
+                    console.error('[HTTP] JSON 解析失败:', e);
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                
+                // 验证参数
+                if (body.enabled === undefined) {
+                    res.code = 0;
+                    res.msg = '参数错误: 需要 enabled 字段';
+                    return res;
+                }
+                
+                // 如果开启推送，必须提供回调地址
+                if (body.enabled === true) {
+                    if (!body.callbackUrl || typeof body.callbackUrl !== 'string' || body.callbackUrl.trim() === '') {
+                        res.code = 0;
+                        res.msg = '参数错误: 开启推送时必须提供 callbackUrl';
+                        return res;
+                    }
+                    
+                    // 验证 URL 格式
+                    const urlPattern = /^https?:\/\/.+/;
+                    if (!urlPattern.test(body.callbackUrl)) {
+                        res.code = 0;
+                        res.msg = '参数错误: callbackUrl 格式不正确，应为 http:// 或 https:// 开头的完整 URL';
+                        return res;
+                    }
+                    
+                    pushConfig.enabled = true;
+                    pushConfig.callbackUrl = body.callbackUrl.trim();
+                    console.log(`[PUSH] [${new Date().toISOString()}] 推送已开启，回调地址: ${pushConfig.callbackUrl}`);
+                } else {
+                    // 关闭推送时，可以只传递 enabled: false
+                    pushConfig.enabled = false;
+                    // 如果提供了 callbackUrl，也更新它（可选）
+                    if (body.callbackUrl && typeof body.callbackUrl === 'string') {
+                        pushConfig.callbackUrl = body.callbackUrl.trim();
+                    }
+                    console.log(`[PUSH] [${new Date().toISOString()}] 推送已关闭`);
+                }
+                
+                res.data = {
+                    enabled: pushConfig.enabled,
+                    callbackUrl: pushConfig.callbackUrl
+                };
+            } else if (req.method === 'GET') {
+                // 获取当前推送配置
+                res.data = {
+                    enabled: pushConfig.enabled,
+                    callbackUrl: pushConfig.callbackUrl
+                };
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST 或 GET';
+            }
+        } 
         else if (path === '/api/health' || path === '/') {
             res.data = {
                 status: 'ok',
@@ -868,7 +1029,9 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                     'POST /api/message/text',
                     'GET /api/db/names',
                     'GET /api/db/tables?dbName=xxx',
-                    'POST /api/db/query'
+                    'POST /api/db/query',
+                    'GET /api/push/config',
+                    'POST /api/push/config'
                 ]
             };
         } 
@@ -891,8 +1054,9 @@ console.log(`[HTTP] [${new Date().toISOString()}] 开始创建 HTTP 服务器...
 // 确保 Buffer 可用
 let Buffer: any;
 try {
-    // 尝试使用全局 Buffer
-    Buffer = global.Buffer || (typeof Buffer !== 'undefined' ? Buffer : null);
+    // 尝试使用全局 Buffer（在 Frida 环境中，Buffer 可能不可用）
+    // 使用 eval 来避免 TypeScript 类型检查错误
+    Buffer = (eval('typeof Buffer !== "undefined" ? Buffer : null') as any) || null;
     if (!Buffer) {
         // 如果 Buffer 不可用，创建一个简单的实现
         console.log(`[HTTP] [${new Date().toISOString()}] Buffer 不可用，使用 Uint8Array 替代`);

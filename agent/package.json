@@ -3,16 +3,17 @@
   "version": "1.2.0",
   "description": "Example Frida agent written in TypeScript",
   "private": true,
-  "main": "agent/index.ts",
+  "main": "index.ts",
   "scripts": {
     "prepare": "npm run build",
     "build": "npm run build:wx391027",
     "watch": "npm run watch:wx391027",
     "start": "npm run start:wx391027",
-    "watch:wx391027": "frida-compile agent/wx391027/index.ts -o dist/agent/wx391027/index.js -w",
-    "build:wx391027": "frida-compile agent/wx391027/index.ts -o dist/agent/wx391027/index.js -c",
+    "watch:wx391027": "frida-compile wx391027/index.ts -o dist/agent/wx391027/index.js -w",
+    "build:wx391027": "frida-compile wx391027/index.ts -o dist/agent/wx391027/index.js -c",
     "start:wx391027": "frida -l dist/agent/wx391027/index.js WeChat.exe",
-    "start:inject": "frida -l examples/inject.js WeChat.exe"
+    "lint": "eslint . --ext .ts,.js,.jsx,.tsx ",
+    "lint:fix": "eslint . --ext .ts,.js,.jsx,.tsx --fix"
   },
   "devDependencies": {
     "@types/frida-gum": "^18.5.1",

@@ -1,0 +1,23 @@
+{
+  "name": "@frida-agent/client",
+  "version": "1.0.0",
+  "description": "WeChat Frida Agent Client Example",
+  "main": "start.ts",
+  "scripts": {
+    "start": "ts-node start.ts",
+    "dev": "ts-node --watch start.ts"
+  },
+  "keywords": [
+    "frida",
+    "wechat",
+    "client",
+    "example"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^18.19.130",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}

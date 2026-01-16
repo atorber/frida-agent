@@ -1,0 +1,23 @@
+{
+  "name": "@frida-agent/wechat-sdk",
+  "version": "1.0.0",
+  "description": "TypeScript SDK for WeChat Frida Agent",
+  "main": "sdk.ts",
+  "types": "sdk.ts",
+  "scripts": {
+    "build": "tsc sdk.ts --outDir dist --declaration --target ES2020 --module ES2020 --moduleResolution node",
+    "test": "node --loader ts-node/esm examples/test.ts"
+  },
+  "keywords": [
+    "frida",
+    "wechat",
+    "sdk",
+    "typescript"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^18.19.34",
+    "typescript": "^5.4.5"
+  }
+}

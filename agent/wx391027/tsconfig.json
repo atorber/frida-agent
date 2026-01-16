@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.frida.json",
+  "compilerOptions": {
+    "skipLibCheck": true
+  },
+  "include": [
+    "../../types/global.d.ts",
+    "./**/*.ts"
+  ]
+}
