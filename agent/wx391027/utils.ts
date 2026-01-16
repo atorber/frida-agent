@@ -145,12 +145,13 @@ export const writeWStringPtr = (str: string) => {
     // console.log(`写入字符串地址存放指针: ${structurePointer.readPointer()}`);
     // console.log(`写入字符串内容确认: ${structurePointer.readPointer().readUtf16String()}`);
 
-    // 写入字符串长度（确保是长度，不包含 null 终止符）
-    structurePointer.add(Process.pointerSize).writeU32(strLength);
+    // 写入字符串长度（字节数，UTF-16 每个字符2个字节，不包含 null 终止符）
+    // 注意：WeChat 的字符串结构期望长度字段存储字节数，而不是字符数
+    structurePointer.add(Process.pointerSize).writeU32(utf16Length);
     // console.log(`写入字符串长度指针: ${structurePointer.add(Process.pointerSize)}`);
 
-    // 写入字符串容量，这里我们假设容量和长度是相同的
-    structurePointer.add(Process.pointerSize + 4).writeU32(strLength);
+    // 写入字符串容量（字节数），这里我们假设容量和长度是相同的
+    structurePointer.add(Process.pointerSize + 4).writeU32(utf16Length);
     // console.log(`写入字符串容量指针: ${structurePointer.add(Process.pointerSize + 4)}`);
 
     // console.log(`写入字符串内容再次确认: ${structurePointer.readPointer().readUtf16String()}`);
@@ -180,10 +181,35 @@ export const readWStringPtr = (addr: any) => {
         size: size,
         capacity: capacity,
         readUtf16String: () => {
-            // UTF-16字符串长度需要乘以2，因为每个字符占2个字节
-            const content = size ? stringPointer.readUtf16String()?.replace(/\0+$/, '') : '';
-            // console.log(`读取字符串内容: ${content}`);
-            return content;
+            if (!stringPointer || stringPointer.isNull()) {
+                return '';
+            }
+            
+            // WeChat 内存中的字符串结构，长度字段可能存储的是字符数，也可能是字节数
+            // 为了兼容两种情况，我们使用不传参数的方式读取，让 Frida 自动读取到 null 终止符
+            // 这是最安全的方式，不依赖于长度字段的值
+            try {
+                const content = stringPointer.readUtf16String()?.replace(/\0+$/, '') || '';
+                return content;
+            } catch (e) {
+                // 如果读取失败，尝试使用 size 作为字符数（假设 size 是字符数）
+                try {
+                    if (size > 0 && size < 10000) {
+                        return stringPointer.readUtf16String(size)?.replace(/\0+$/, '') || '';
+                    }
+                } catch (e2) {
+                    // 如果还是失败，尝试将 size/2 作为字符数（假设 size 是字节数）
+                    try {
+                        const charCount = Math.floor(size / 2);
+                        if (charCount > 0 && charCount < 10000) {
+                            return stringPointer.readUtf16String(charCount)?.replace(/\0+$/, '') || '';
+                        }
+                    } catch (e3) {
+                        // 所有方法都失败
+                    }
+                }
+                return '';
+            }
         }
     };
 };

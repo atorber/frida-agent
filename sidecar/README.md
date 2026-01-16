@@ -1,6 +1,6 @@
 # wechat-sidecar
 
-A Sidecar Demo for WeChat 3.9.10.19
+A Sidecar Demo for WeChat 3.9.10.27
 
 [![Powered by Sidecar](https://img.shields.io/badge/Powered%20By-Sidecar-red.svg)](https://github.com/huan/sidecar)
 
@@ -13,17 +13,14 @@ WeChat Sidecar can intercepting function calls or messages or events passed betw
 ### 1. WeChat Sidecar
 
 ```sh
-git clone https://github.com/huan/wechat-sidecar.git
-cd wechat-sidecar
-git checkout wechat-3.9.10.19
+git clone https://github.com/your-repo/frida-agent.git
+cd frida-agent/sidecar
 npm install
 ```
 
-### 2. WeChat 3.9.10.19
+### 2. WeChat 3.9.10.27
 
-Download WeChat 3.9.10.19 and install it.
-
-> Here's a [download link (with code: `cscn`)](https://pan.baidu.com/share/init?surl=IHRM2OMvrLyuCz5MRbigGg) for you.
+Download WeChat 3.9.10.27 and install it.
 
 ## Usage
 

@@ -24,15 +24,7 @@ import {
     Message,
 } from './types.js'
 
-const offsets = {
-    kGetAccountServiceMgr: 0x1C1FE90, // 3.9.10.27
-    kGetAppDataSavePath: 0x26A7780, // done
-    kGetCurrentDataPath: 0x2314E40, // done
-    kGetContactMgr: 0x1C0BDE0, // done
-    kGetContactList: 0x2265540, // done
-    kNewContact: 0x25E3650,
-    kGetContact: 0x225F950,
-}
+import { offsets } from './offset.js'
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 
@@ -250,10 +242,8 @@ export function contactRawPayload(wxid: string) {
     var getContactAddr = moduleBaseAddress.add(offsets.kGetContact);
     var GetContact = new NativeFunction(getContactAddr, 'int64', ['pointer', 'pointer', 'pointer']);
 
-    // 构造toUser WeChatWString对象
-    var toUserStr = Memory.allocUtf16String(wxid);
-    var toUserStrPtr = Memory.alloc(Process.pointerSize);
-    toUserStrPtr.writePointer(toUserStr);
+    // 构造toUser WeChatWString对象（使用 writeWStringPtr 创建正确的字符串结构）
+    var toUserStrPtr = writeWStringPtr(wxid);
 
     // 分配内存用于存放Contact对象
     var contactBuf = Memory.alloc(0x6B0); // Contact对象所需的内存大小
@@ -262,14 +252,39 @@ export function contactRawPayload(wxid: string) {
     Constructor(contactBuf); // 构造Contact对象
     var success = GetContact(Instance(), toUserStrPtr, contactBuf);
 
+    // 注意：GetContact 的返回值可能不是错误码，而是其他值（如指针）
+    // 即使返回值非0，也可能成功，所以先尝试读取数据
+    // 如果读取失败（如 UserName 为空），再判断为失败
+
     // 读取并转换获取的联系人信息到适当的格式——这需要根据common::ContactCast转换方法的具体实施来确定
     // 假设ContactCast就是简单地将内存信息拷贝到另外一个buffer（实际情况会更复杂）
     var info: any = {}; // 假设这是一个对JavaScript对象的映射
     const start = contactBuf;
+
+    // 辅助函数：安全读取指针指向的字符串
+    const safeReadString = (ptr: NativePointer): string => {
+        try {
+            if (ptr.isNull()) return '';
+            const strPtr = ptr.readPointer();
+            if (strPtr.isNull()) return '';
+            return strPtr.readUtf16String() || '';
+        } catch (e) {
+            return '';
+        }
+    };
     // mmString   UserName;			//0x10  + 0x20
-    info.UserName = readWideString(start.add(0x10));
+    try {
+        info.UserName = readWideString(start.add(0x10));
+        // 如果 UserName 为空，可能表示获取失败
+        if (!info.UserName || info.UserName === '') {
+            console.log(`GetContact可能失败: wxid=${wxid}, UserName为空, success=${success}`);
+            // 不立即返回，继续尝试读取其他字段
+        }
+    } catch (e) {
+        info.UserName = '';
+    }
     // mmString   Alias;				//0x30  + 0x20
-    info.Alias = start.add(0x30 + 0x20).readPointer().readUtf16String();
+    info.Alias = safeReadString(start.add(0x30 + 0x20));
     // mmString   EncryptUserName;		//0x50  + 0x20
     // const EncryptUserName = start.add(0x50 + 0x20).readPointer().readUtf16String();
     // console.log('EncryptUserName:', EncryptUserName)
@@ -280,31 +295,43 @@ export function contactRawPayload(wxid: string) {
     // int32_t    VerifyFlag;			//0x78  + 0x4
     // int32_t	   _0x7C;				//0x7C  + 0x4
     // mmString   Remark;				//0x80  + 0x20
-    info.Remark = start.add(0x80 + 0x20).readPointer().readUtf16String();
+    info.Remark = safeReadString(start.add(0x80 + 0x20));
     // mmString   NickName;			//0xA0  + 0x20
-    info.NickName = readWideString(start.add(0xA0));
+    try {
+        info.NickName = readWideString(start.add(0xA0));
+    } catch (e) {
+        info.NickName = '';
+    }
     // mmString   LabelIDList;			//0xC0  + 0x20
-    info.LabelIDList = start.add(0xC0 + 0x20).readPointer().readUtf16String();
+    info.LabelIDList = safeReadString(start.add(0xC0 + 0x20));
     // mmString   DomainList;			//0xE0  + 0x20
     // int64_t    ChatRoomType;		//0x100 + 0x8
-    info.ChatRoomType = start.add(0x100).readPointer().readUtf16String();
+    info.ChatRoomType = safeReadString(start.add(0x100));
     // mmString   PYInitial;			//0x108 + 0x20
-    info.PYInitial = start.add(0x108 + 0x20).readPointer().readUtf16String();
+    info.PYInitial = safeReadString(start.add(0x108 + 0x20));
     // mmString   QuanPin;				//0x128 + 0x20
-    info.QuanPin = start.add(0x128 + 0x20).readPointer().readUtf16String();
+    info.QuanPin = safeReadString(start.add(0x128 + 0x20));
     // mmString   RemarkPYInitial;		//0x148 + 0x20
     // mmString   RemarkQuanPin;		//0x168 + 0x20
     // mmString   BigHeadImgUrl;		//0x188 + 0x20
-    info.BigHeadImgUrl = readWideString(start.add(0x188 + 0x20));
+    try {
+        info.BigHeadImgUrl = readWideString(start.add(0x188 + 0x20));
+    } catch (e) {
+        info.BigHeadImgUrl = '';
+    }
     // mmString   SmallHeadImgUrl;		//0x1A8 + 0x20
-    info.SmallHeadImgUrl = readWideString(start.add(0x1A8));
+    try {
+        info.SmallHeadImgUrl = readWideString(start.add(0x1A8));
+    } catch (e) {
+        info.SmallHeadImgUrl = '';
+    }
     // mmString   _HeadImgMd5;			//0x1C8 + 0x20 
 
     // //int64_t  ChatRoomNotify;      //0x1E8
-    info.ChatRoomNotify = start.add(0x1E8).readPointer().readUtf16String();
+    info.ChatRoomNotify = safeReadString(start.add(0x1E8));
     // char       _0x1E8[24];			//0x1E8 + 0x18
     // mmString   ExtraBuf;			//0x200 + 0x20
-    info.ExtraBuf = start.add(0x200 + 0x20).readPointer().readUtf16String();
+    info.ExtraBuf = safeReadString(start.add(0x200 + 0x20));
 
     // int32_t    ImgFlag;			   //0x220 + 0x4
     info.ImgFlag = start.add(0x220).readU32();
@@ -319,21 +346,29 @@ export function contactRawPayload(wxid: string) {
     // int32_t   _0x254;				//0x254 + 0x4
 
     // mmString  WeiboNickname;		//0x258 + 0x20
-    info.WeiboNickname = readWideString(start.add(0x258 + 0x20));
+    try {
+        info.WeiboNickname = readWideString(start.add(0x258 + 0x20));
+    } catch (e) {
+        info.WeiboNickname = '';
+    }
 
     // int32_t  PersonalCard;		   //0x278 + 0x4
     // int32_t  _0x27C;			   //0x27c + 0x4
 
     // mmString  Signature;		  //0x280 + 0x20
     // mmString  Country;			  //0x2A0 + 0x20
-    info.Country = readWideString(start.add(0x2A0 + 0x20));
+    try {
+        info.Country = readWideString(start.add(0x2A0 + 0x20));
+    } catch (e) {
+        info.Country = '';
+    }
 
     // std::vector<mmString>  PhoneNumberList; //0x2C0 + 0x18
 
     // mmString  Province;				//0x2D8 + 0x20
-    info.Province = start.add(0x2D8 + 0x20).readUtf16String();
+    info.Province = safeReadString(start.add(0x2D8 + 0x20));
     // mmString  City;					//0x2F8 + 0x20
-    info.City = start.add(0x2F8 + 0x20).readUtf16String();
+    info.City = safeReadString(start.add(0x2F8 + 0x20));
     // int32_t   Source;				//0x318 + 0x4
     info.Source = start.add(0x318).readU32();
     // int32_t   _0x31C;				//0x31C + 0x4
@@ -350,7 +385,7 @@ export function contactRawPayload(wxid: string) {
     // int32_t   _0x394;			  //0x394 + 0x4
 
     // mmString  VerifyContent;      //0x398 + 0x20
-    info.VerifyContent = start.add(0x398 + 0x20).readPointer().readUtf16String();
+    info.VerifyContent = safeReadString(start.add(0x398 + 0x20));
     // int32_t  AlbumStyle;	      //0x3B8 + 0x4
     // int32_t  AlbumFlag;			  //0x3BC + 0x4
     // mmString AlbumBGImgID;		  //0x3C0 + 0x20
@@ -368,24 +403,33 @@ export function contactRawPayload(wxid: string) {
     // int32_t  _0x41C;			//0x41C + 0x4
 
     // mmString IDCardNum;			//0x420 + 0x20
-    info.IDCardNum = start.add(0x420 + 0x20).readPointer().readUtf16String();
+    info.IDCardNum = safeReadString(start.add(0x420 + 0x20));
     // mmString RealName;			//0x440 + 0x20
-    info.RealName = start.add(0x440 + 0x20).readPointer().readUtf16String();
+    info.RealName = safeReadString(start.add(0x440 + 0x20));
 
     // mmString MobileHash;		//0x460 + 0x20
     // mmString MobileFullHash;    //0x480 + 0x20
 
     // mmString ExtInfo;			//0x4A0 + 0x20
-    info.ExtInfo = start.add(0x4A0 + 0x20).readPointer().readUtf16String();
+    info.ExtInfo = safeReadString(start.add(0x4A0 + 0x20));
     // mmString _0x4C0;		    //0x4C0 + 0x20
 
     // mmString CardImgUrl;	    //0x4EO + 0x20
-    info.CardImgUrl = start.add(0x4E0 + 0x20).readPointer().readUtf16String();
+    info.CardImgUrl = safeReadString(start.add(0x4E0 + 0x20));
     // char _res[0x1A8];           //0x500 + 
 
     // console.log('contact info:', JSON.stringify(info))
 
-
+    // 验证是否成功获取联系人信息
+    // 如果 UserName 为空，可能表示获取失败
+    if (!info.UserName || info.UserName === '') {
+        console.log(`GetContact失败: wxid=${wxid}, 无法读取联系人信息`);
+        return {
+            error: true,
+            message: `获取联系人失败: wxid=${wxid}, 无法读取联系人信息`,
+            wxid: wxid
+        } as any;
+    }
 
     // 请根据实际情况自行实现清理内存的逻辑
     // 如果contact有destructor，可能需要调用destructor来确保内存被正确释放

@@ -20,43 +20,10 @@ import {
 } from './utils.js'
 
 import {
-    Contact,
-    Message,
-} from './types.js'
-
-import {
     getLocalIdAndDbIdx
 } from './sqlite.js'
 
-const offsets = {
-    kSendMessageMgr: 0x1C1E690, // 3.9.10.27
-    kSendTextMsg: 0x238DDD0, // 3.9.10.27
-    kFreeChatMsg: 0x1C1FF10, // 3.9.10.27
-    kNewChatMsg: 0x1C28800,
-    kSendImageMsg: 0x2383560, // 3.9.10.27
-    kAppMsgMgr: 0x1C23630, // 3.9.10.27
-    kSendFileMsg: 0x21969E0, // 3.9.10.27
-    kSendPatMsg: 0x2D669B0, // 3.9.10.27
-    kForwardMsg: 0x238D350, // 3.9.10.27
-    OS_NEW:0x1C28800,
-    OS_FREE:0x1C1FF10,
-    OS_SEND_MSG_MGR:0x1C1E690,
-    OS_SEND_TEXT:0x238DDD0,
-    OS_SEND_IMAGE:0x2383560,
-    OS_GET_APP_MSG_MGR:0x1C23630,
-    OS_SEND_FILE:0x21969E0,
-    OS_RTM_NEW:0x1C27D50,
-    OS_RTM_FREE:0x1C27120,
-    OS_SEND_RICH_TEXT:0x21A09C0,
-    OS_SEND_PAT_MSG:0x2D669B0,
-    OS_FORWARD_MSG:0x238D350,
-    OS_GET_EMOTION_MGR:0x1C988D0,
-    OS_SEND_EMOTION:0x227B9E0,
-    OS_GET_SNS_DATA_MGR: 0x22A91C0,
-    OS_GET_SNS_FIRST_PAGE: 0x2ED9080,
-    OS_GET_SNS_TIMELINE_MGR: 0x2E6B110,
-    OS_GET_SNS_NEXT_PAGE: 0x2EFEC00,
-}
+import { offsets } from './offset.js'
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 
@@ -64,22 +31,31 @@ const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 发送文本消息 3.9.10.27
 */ 
 export const messageSendText = (contactId: string, text: string, atWxids?: string[]): number => {
-    console.log('messageSendText 开始执行:', { contactId, text, atWxids });
+    const startTime = Date.now();
+    console.log(`[MSG] [${new Date().toISOString()}] messageSendText 开始执行:`, { 
+        contactId, 
+        textLength: text.length,
+        textPreview: text.length > 50 ? text.substring(0, 50) + '...' : text,
+        atWxids 
+    });
+    
     try {
+        const step1Time = Date.now();
         const send_message_mgr_addr = moduleBaseAddress.add(offsets.kSendMessageMgr);
         const send_text_msg_addr = moduleBaseAddress.add(offsets.kSendTextMsg);
         const free_chat_msg_addr = moduleBaseAddress.add(offsets.kFreeChatMsg);
 
-        console.log('函数地址:', {
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤1: 获取函数地址完成，耗时: ${Date.now() - step1Time}ms`, {
             send_message_mgr_addr,
             send_text_msg_addr,
             free_chat_msg_addr
         });
 
+        const step2Time = Date.now();
         // 分配内存并初始化
         const chat_msg = Memory.alloc(0x460);
         chat_msg.writeByteArray(Array(0x460).fill(0));
-        console.log('消息缓冲区地址:', chat_msg);
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤2: 分配消息缓冲区完成，耗时: ${Date.now() - step2Time}ms，地址:`, chat_msg);
 
         // 检查是否需要@人，如果需要且在群聊中，需要在文本前添加@用户
         let msgText = text;
@@ -102,15 +78,19 @@ export const messageSendText = (contactId: string, text: string, atWxids?: strin
             console.log('添加@后的消息:', msgText);
         }
 
+        const step3Time = Date.now();
         // 构造字符串参数
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤3: 开始构造字符串参数...`);
         const to_user = writeWStringPtr(contactId);
+        console.log(`[MSG] [${new Date().toISOString()}] to_user 指针创建完成:`, to_user);
         const text_msg = writeWStringPtr(msgText);
+        console.log(`[MSG] [${new Date().toISOString()}] text_msg 指针创建完成:`, text_msg);
 
         if (!to_user || !text_msg) {
             throw new Error('Failed to create string pointers');
         }
 
-        console.log('字符串指针:', {
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤3: 字符串参数构造完成，耗时: ${Date.now() - step3Time}ms`, {
             to_user,
             text_msg
         });
@@ -178,15 +158,21 @@ export const messageSendText = (contactId: string, text: string, atWxids?: strin
             throw new Error('Failed to create wxAters');
         }
 
+        const step4Time = Date.now();
         // 创建NativeFunction对象
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤4: 创建 NativeFunction 对象...`);
         const mgr = new NativeFunction(send_message_mgr_addr, 'void', []);
         const send = new NativeFunction(send_text_msg_addr, 'uint64', ['pointer', 'pointer', 'pointer', 'pointer', 'int32', 'int32', 'int32', 'int32']);
         const free = new NativeFunction(free_chat_msg_addr, 'void', ['pointer']);
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤4: NativeFunction 对象创建完成，耗时: ${Date.now() - step4Time}ms`);
 
-        console.log('调用发送消息管理器初始化');
+        const step5Time = Date.now();
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤5: 调用发送消息管理器初始化...`);
         mgr();
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤5: 发送消息管理器初始化完成，耗时: ${Date.now() - step5Time}ms`);
 
-        console.log('发送文本消息，参数:', {
+        const step6Time = Date.now();
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤6: 准备发送文本消息，参数:`, {
             chat_msg,
             to_user,
             text_msg,
@@ -194,15 +180,26 @@ export const messageSendText = (contactId: string, text: string, atWxids?: strin
         });
 
         // 发送文本消息
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤6: 开始调用 send 函数...`);
         const success = send(chat_msg, to_user, text_msg, wxAters.readPointer(), 1, 1, 0, 0);
-        console.log('发送结果:', success);
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤6: send 函数调用完成，耗时: ${Date.now() - step6Time}ms，返回值:`, success);
 
+        const step7Time = Date.now();
         // 释放内存
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤7: 释放内存...`);
         free(chat_msg);
+        console.log(`[MSG] [${new Date().toISOString()}] 步骤7: 内存释放完成，耗时: ${Date.now() - step7Time}ms`);
 
-        return Number(success) > 0 ? 1 : 0;
-    } catch (error) {
-        console.error('Error in messageSendText:', error);
+        const totalTime = Date.now() - startTime;
+        const result = Number(success) > 0 ? 1 : 0;
+        console.log(`[MSG] [${new Date().toISOString()}] messageSendText 执行完成，总耗时: ${totalTime}ms，结果:`, result);
+        
+        return result;
+    } catch (error: any) {
+        const totalTime = Date.now() - startTime;
+        console.error(`[MSG] [${new Date().toISOString()}] messageSendText 执行异常，总耗时: ${totalTime}ms`);
+        console.error(`[MSG] [${new Date().toISOString()}] 错误信息:`, error);
+        console.error(`[MSG] [${new Date().toISOString()}] 错误堆栈:`, error.stack);
         return -1;
     }
 }

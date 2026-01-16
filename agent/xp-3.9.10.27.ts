@@ -2,6 +2,7 @@
  * WeChat 3.9.10.27
  * 
  */
+// @ts-ignore
 import net from '@frida/net';
 import { HTTPParser } from 'http-parser-js';
 import {

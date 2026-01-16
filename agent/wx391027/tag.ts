@@ -1,8 +1,4 @@
-const offsets = {
-    kNetSceneModifyContactLabel: 0x250C480,
-    kSceneCenter: 0x1CDD710,
-    kSceneNetSceneBase: 0x2454EB0,   
-}
+import { offsets } from './offset.js'
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 

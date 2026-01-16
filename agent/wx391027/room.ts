@@ -24,19 +24,7 @@ import {
     Message,
 } from './types.js'
 
-const offsets = {
-    kGetContactMgr: 0x1C0BDE0, // done
-    kGetContactList: 0x2265540, // done
-    // const uint64_t kChatRoomMgr = 0x1C4E200;
-    kChatRoomMgr: 0x1C4E200,
-    kChatRoomInfoConstructor: 0x25CF470, // 3.9.10.27
-    kGetChatRoomDetailInfo: 0x222BEA0, // 3.9.10.27
-    kModChatRoomTopic: 0x2364610, // 3.9.10.27
-    kOpLogMgr: 0x1C193C0,
-    kAddChatroomMember: 0x221B8A0,
-    kDelChatroomMember: 0x221BEE0,
-    kInviteChatroomMember: 0x221B280,
-}
+import { offsets } from './offset.js'
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 
@@ -94,40 +82,89 @@ export function roomList() {
 获取群详情
 */
 export function roomRawPayload(roomId: string) {
-    let success = -1;
-    let instanceAddr = moduleBaseAddress.add(offsets.kChatRoomMgr);
-    let constructorAddr = moduleBaseAddress.add(offsets.kChatRoomInfoConstructor);
-    let getChatRoomDetailInfoAddr = moduleBaseAddress.add(offsets.kGetChatRoomDetailInfo);
+    try {
+        let success = -1;
+        let instanceAddr = moduleBaseAddress.add(offsets.kChatRoomMgr);
+        let constructorAddr = moduleBaseAddress.add(offsets.kChatRoomInfoConstructor);
+        let getChatRoomDetailInfoAddr = moduleBaseAddress.add(offsets.kGetChatRoomDetailInfo);
 
-    let instance = new NativeFunction(instanceAddr, 'pointer', []);
-    let constructor = new NativeFunction(constructorAddr, 'pointer', ['pointer']);
-    let getChatRoomDetailInfo = new NativeFunction(getChatRoomDetailInfoAddr, 'uint8', ['pointer', 'pointer', 'pointer', 'int']);
+        let instance = new NativeFunction(instanceAddr, 'pointer', []);
+        let constructor = new NativeFunction(constructorAddr, 'pointer', ['pointer']);
+        let getChatRoomDetailInfo = new NativeFunction(getChatRoomDetailInfoAddr, 'uint8', ['pointer', 'pointer', 'pointer', 'int']);
 
-    let roomIdStr = writeWStringPtr(roomId);
-    let buff = Memory.alloc(0x148);
+        let roomIdStr = writeWStringPtr(roomId);
+        let buff = Memory.alloc(0x148);
 
-    // 调用constructor创建ChatRoomInfoBuf
-    let chatRoomInfoBuf = constructor(buff);
-    const instancePtr = instance();
+        // 调用constructor创建ChatRoomInfoBuf
+        let chatRoomInfoBuf = constructor(buff);
+        const instancePtr = instance();
 
-    console.log('instancePtr:', instancePtr)
+        console.log('roomRawPayload - instancePtr:', instancePtr);
+        console.log('roomRawPayload - roomId:', roomId);
 
-    // 调用GetChatRoomDetailInfo
-    success = getChatRoomDetailInfo(instancePtr, roomIdStr, chatRoomInfoBuf, 1);
+        // 调用GetChatRoomDetailInfo
+        success = getChatRoomDetailInfo(instancePtr, roomIdStr, chatRoomInfoBuf, 1);
 
-    let info = {};
-    if (success === 1) {
-        info = {
-            id: readWideString(chatRoomInfoBuf.add(0x8)),
-            notice: readWideString(chatRoomInfoBuf.add(0x28)),
-            admin: readWideString(chatRoomInfoBuf.add(0x48)),
-            xml: readWideString(chatRoomInfoBuf.add(0x78)),
+        console.log('roomRawPayload - success:', success);
+
+        // 辅助函数：安全读取字符串
+        const safeReadWideString = (ptr: NativePointer): string => {
+            try {
+                if (ptr.isNull()) return '';
+                return readWideString(ptr) || '';
+            } catch (e) {
+                console.error('读取字符串失败:', e);
+                return '';
+            }
         };
-        // console.log('获取到的聊天室详情信息:', JSON.stringify(info, null, 2));
-    } else {
-        console.error('获取聊天室详情信息失败');
+
+        let info: any = {};
+        
+        // 即使 success !== 1，也尝试读取数据（可能返回值不是错误码）
+        try {
+            info = {
+                id: safeReadWideString(chatRoomInfoBuf.add(0x8)),
+                notice: safeReadWideString(chatRoomInfoBuf.add(0x28)),
+                admin: safeReadWideString(chatRoomInfoBuf.add(0x48)),
+                xml: safeReadWideString(chatRoomInfoBuf.add(0x78)),
+            };
+            
+            // 如果 id 为空，可能表示获取失败
+            if (!info.id || info.id === '') {
+                console.error(`获取群详情失败: roomId=${roomId}, success=${success}, id为空`);
+                return {
+                    error: true,
+                    message: `获取群详情失败: roomId=${roomId}, success=${success}, 无法读取群信息`,
+                    roomId: roomId,
+                    success: success
+                } as any;
+            }
+            
+            // console.log('获取到的聊天室详情信息:', JSON.stringify(info, null, 2));
+        } catch (e: any) {
+            console.error('读取群详情数据失败:', e);
+            return {
+                error: true,
+                message: `读取群详情数据失败: roomId=${roomId}, 错误=${e.message || String(e)}`,
+                roomId: roomId,
+                success: success
+            } as any;
+        }
+
+        // 如果 success !== 1 但能读取到数据，记录警告但不返回错误
+        if (success !== 1) {
+            console.log(`警告: GetChatRoomDetailInfo 返回值=${success}，但成功读取到群信息`);
+        }
+
+        return info;
+    } catch (e: any) {
+        console.error('roomRawPayload 异常:', e);
+        return {
+            error: true,
+            message: `获取群详情异常: roomId=${roomId}, 错误=${e.message || String(e)}`,
+            roomId: roomId
+        } as any;
     }
-    return info;
 };
 
 /*

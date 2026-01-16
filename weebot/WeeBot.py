@@ -11,7 +11,6 @@ import queue
 import json
 import time
 
-import os
 import binascii
 
 userpath = os.path.expanduser('~')
@@ -21,7 +20,7 @@ rootpath =  userpath + '\\Documents\\WeChat Files\\'
 xor_cache = None
 xor_len = 2
 
-isStart = False
+is_start = False
 
 def image_decrypt(data_path: str, message_id: str):
     try:
@@ -127,6 +126,7 @@ stop_event = asyncio.Event()  # 用于停止异步任务的事件
 ws_stop_event = asyncio.Event()  # 用于停止 WebSocket 服务器的事件
 ws_server = None  # 保存 WebSocket 服务器实例
 session = None  # 保存 frida 会话实例
+script = None  # 保存 frida 脚本实例
 loop = asyncio.new_event_loop()
 
 # 日志记录函数
@@ -160,6 +160,17 @@ def resource_path(relative_path):
 
 # Frida消息处理函数
 def on_message(message, data):
+    # 处理命令响应
+    if 'type' in message and message['type'] == 'command_response':
+        log(f"收到命令响应: {json.dumps(message.get('payload', {}))}")
+        # 可以通过 WebSocket 发送响应给客户端
+        asyncio.run_coroutine_threadsafe(
+            broadcast_command_response(message.get('payload', {})), 
+            loop
+        )
+        return
+    
+    # 处理普通消息
     if 'payload' in message:
         content = message['payload']['text']
         contactId = message['payload']['talkerId'] or 'self'
@@ -167,12 +178,21 @@ def on_message(message, data):
         log(f"消息原文: {json.dumps(message['payload'])}")
         if content == "ding":
             log('内容是 ding: ' + content)
-            script.post({
-                'type': 'send',
-                'payload': {
-                    'text': 'dong',
-                    'contactId': contactId,
-                }})
+            # 使用 RPC 调用发送消息
+            try:
+                if script and hasattr(script.exports_sync, 'messageSendText'):
+                    result = script.exports_sync.messageSendText(contactId, 'dong')
+                    log(f"自动回复发送结果: {result}")
+                elif script:
+                    # 备用方案：通过 script.post 发送
+                    script.post({
+                        'type': 'send',
+                        'payload': {
+                            'text': 'dong',
+                            'contactId': contactId,
+                        }})
+            except Exception as e:
+                log(f"发送自动回复失败: {str(e)}")
         type = message['payload']['type']
         if type == 3:
             log('内容是图片: ' + content)
@@ -209,11 +229,21 @@ def on_message(message, data):
 async def broadcast_message(payload):
     if clients:
         message = json.dumps(payload)
-        log(f"广播消息推送成功: {payload['id']}")
+        log(f"广播消息推送成功: {payload.get('id', 'unknown')}")
         tasks = [asyncio.create_task(client.send(message)) for client in clients]
         await asyncio.wait(tasks)
     else:
         log("没有客户端连接")
+
+# 广播命令响应到所有 WebSocket 客户端
+async def broadcast_command_response(response):
+    if clients:
+        message = json.dumps({
+            'type': 'command_response',
+            'data': response
+        })
+        tasks = [asyncio.create_task(client.send(message)) for client in clients]
+        await asyncio.wait(tasks)
 
 # 启动Frida脚本
 def start_script():
@@ -222,34 +252,237 @@ def start_script():
         log("尝试附加到 WeChat.exe 进程...")
         session = frida.attach("WeChat.exe")
         script_path = resource_path("xp-3.9.10.27.js")
+        
+        # 读取脚本文件
         with open(script_path, 'r', encoding="utf-8") as f:
             script_content = f.read()
+        
+        # 检查是否是打包格式（以 📦 开头）
+        if script_content.startswith('📦'):
+            log("检测到打包格式，尝试提取 JavaScript 代码...")
+            # 从打包格式中提取实际的 JavaScript 代码
+            # 打包格式的结构：📦\n文件列表\n✄\n实际的 JavaScript 代码\n✄\n{source map}
+            parts = script_content.split('✄')
+            if len(parts) >= 3:
+                # 打包格式结构：
+                # 📦\n文件列表\n✄\n{source map}\n✄\n实际的 JavaScript 代码\n✄\n{source map}
+                # parts[0]: 文件列表
+                # parts[1]: 第一个 source map
+                # parts[2]: 实际的 JavaScript 代码
+                script_content = parts[2].strip()
+                
+                # 移除后续的 source map（查找第一个 ✄）
+                # parts[2] 应该包含完整的 JavaScript 代码，直到下一个 ✄
+                first_separator = script_content.find('✄')
+                if first_separator > 0:
+                    # 找到第一个 ✄，这是代码的结束位置
+                    script_content = script_content[:first_separator].strip()
+                else:
+                    # 如果没有找到 ✄，查找第一个 source map
+                    lines = script_content.split('\n')
+                    cleaned_lines = []
+                    for line in lines:
+                        # 如果遇到 source map 开始，停止添加
+                        if line.strip().startswith('{"version"'):
+                            break
+                        cleaned_lines.append(line)
+                    script_content = '\n'.join(cleaned_lines).strip()
+                
+                # 确保代码以完整语句结尾（server.listen 应该以 }); 结尾）
+                if script_content:
+                    # 查找最后一个 });（server.listen 的结束）
+                    last_server_end = script_content.rfind('});')
+                    if last_server_end > 0:
+                        # 检查前面是否有 server.listen
+                        before_end = script_content[max(0, last_server_end - 200):last_server_end]
+                        if 'server.listen' in before_end:
+                            script_content = script_content[:last_server_end + 3].strip()
+                        else:
+                            # 查找最后一个 };
+                            last_semicolon = script_content.rfind('};')
+                            if last_semicolon > 0:
+                                script_content = script_content[:last_semicolon + 2].strip()
+                            else:
+                                last_brace = script_content.rfind('}')
+                                if last_brace > 0:
+                                    script_content = script_content[:last_brace + 1].strip()
+                    else:
+                        # 查找最后一个 };
+                        last_semicolon = script_content.rfind('};')
+                        if last_semicolon > 0:
+                            script_content = script_content[:last_semicolon + 2].strip()
+                        else:
+                            last_brace = script_content.rfind('}')
+                            if last_brace > 0:
+                                script_content = script_content[:last_brace + 1].strip()
+            elif len(parts) >= 2:
+                # 如果只有两个部分，可能是旧格式
+                # 第二个部分应该是 JavaScript 代码
+                script_content = parts[1].strip()
+                # 移除 source map
+                lines = script_content.split('\n')
+                cleaned_lines = []
+                for line in lines:
+                    if line.strip().startswith('{"version"'):
+                        break
+                    cleaned_lines.append(line)
+                script_content = '\n'.join(cleaned_lines).strip()
+            else:
+                raise Exception("无法从打包格式中提取 JavaScript 代码，请重新编译：frida-compile agent/wx391027/index.ts -o weebot/xp-3.9.10.27.js（不使用 -c 参数）")
+        
+        # 检查脚本是否包含 rpc.exports
+        if 'rpc.exports' not in script_content:
+            log("警告: 脚本中未找到 rpc.exports，RPC 功能可能不可用")
+        
+        # 调试：检查提取后的代码
+        if len(script_content) < 10000:
+            first_lines = script_content.split('\n')[:10]
+            last_lines = script_content.split('\n')[-5:]
+            log(f"警告: 提取后的代码可能不完整，长度: {len(script_content)} 字符")
+            log(f"前10行: {first_lines}")
+            log(f"最后5行: {last_lines}")
+        
         script = session.create_script(script_content)
         script.on("message", on_message)
         script.load()
         log("API服务加载成功...")
-        isStart = True
+        
+        # 测试 RPC 调用
+        try:
+            # 检查 RPC 导出是否成功
+            if hasattr(script.exports_sync, 'checkLogin'):
+                try:
+                    login_status = script.exports_sync.checkLogin()
+                    log(f"登录状态检查: {login_status}")
+                except Exception as e:
+                    log(f"RPC 调用测试失败: {str(e)}")
+            else:
+                # 列出所有可用的导出方法
+                available_methods = [m for m in dir(script.exports_sync) if not m.startswith('_')]
+                log(f"可用的 RPC 方法: {available_methods}")
+        except Exception as e:
+            log(f"RPC 测试警告: {str(e)}")
+        
+        is_start = True
         # 启动开关禁用，防止重复启动；停止开关激活
         start_button.config(state=tk.DISABLED)
         stop_button.config(state=tk.NORMAL)
 
     except Exception as e:
         log(f"错误: {str(e)}")
+        import traceback
+        log(f"详细错误: {traceback.format_exc()}")
 
 # 停止Frida脚本
 def stop_script():
-    global session
+    global session, script
     try:
+        if script:
+            script.unload()
+            script = None
         if session:
             session.detach()
             session = None
             log("已从进程分离。")
-            isStart = False
+            is_start = False
             # 启动开关激活；停止开关禁用，防止重复启动
             start_button.config(state=tk.NORMAL)
             stop_button.config(state=tk.DISABLED)
     except Exception as e:
         log(f"错误: {str(e)}")
+
+# 处理 WebSocket 客户端命令
+async def handle_websocket_command(command_data):
+    """
+    处理来自 WebSocket 客户端的命令
+    
+    支持的命令：
+    - sendText: 发送文本消息
+      params: {contactId: string, text: string}
+    - getSelfInfo: 获取登录用户信息
+    - getContactList: 获取联系人列表
+    - getRoomList: 获取群列表
+    - getContact: 获取联系人详情
+      params: {contactId: string}
+    - getRoom: 获取群详情
+      params: {roomId: string}
+    - checkLogin: 检查登录状态
+    - getDbNames: 获取数据库名称列表
+    - getDbTables: 获取数据库表列表
+      params: {dbName: string}
+    - execDbQuery: 执行数据库查询
+      params: {dbName: string, sql: string}
+    """
+    try:
+        cmd = command_data.get('command')
+        params = command_data.get('params', {})
+        
+        if not script:
+            return {'success': False, 'error': 'Frida 脚本未加载'}
+        
+        # 通过 script.exports_sync 调用 Frida 脚本中的函数
+        try:
+            if cmd == 'sendText':
+                result = script.exports_sync.messageSendText(
+                    params.get('contactId', ''),
+                    params.get('text', '')
+                )
+                return {'success': True, 'data': result}
+            
+            elif cmd == 'getSelfInfo':
+                result = script.exports_sync.contactSelfInfo()
+                return {'success': True, 'data': result}
+            
+            elif cmd == 'getContactList':
+                result = script.exports_sync.contactList()
+                return {'success': True, 'data': result}
+            
+            elif cmd == 'getRoomList':
+                result = script.exports_sync.roomList()
+                return {'success': True, 'data': result}
+            
+            elif cmd == 'getContact':
+                result = script.exports_sync.contactRawPayload(params.get('contactId', ''))
+                return {'success': True, 'data': result}
+            
+            elif cmd == 'getRoom':
+                result = script.exports_sync.roomRawPayload(params.get('roomId', ''))
+                return {'success': True, 'data': result}
+            
+            elif cmd == 'checkLogin':
+                result = script.exports_sync.checkLogin()
+                return {'success': True, 'data': result}
+            
+            elif cmd == 'getDbNames':
+                result = script.exports_sync.getDbNames()
+                return {'success': True, 'data': result}
+            
+            elif cmd == 'getDbTables':
+                result = script.exports_sync.getDbTables(params.get('dbName', ''))
+                return {'success': True, 'data': result}
+            
+            elif cmd == 'execDbQuery':
+                result = script.exports_sync.execDbQuery(
+                    params.get('dbName', ''),
+                    params.get('sql', '')
+                )
+                return {'success': True, 'data': result}
+            
+            else:
+                return {'success': False, 'error': f'未知命令: {cmd}'}
+        
+        except AttributeError:
+            # 如果 script.exports_sync 不存在，尝试通过 script.post 发送命令
+            script.post({
+                'type': 'command',
+                'command': cmd,
+                'params': params
+            })
+            return {'success': True, 'message': '命令已发送，等待响应'}
+        
+    except Exception as e:
+        log(f"处理命令错误: {str(e)}")
+        return {'success': False, 'error': str(e)}
 
 # WebSocket连接处理函数
 async def websocket_handler(websocket, path):
@@ -257,7 +490,19 @@ async def websocket_handler(websocket, path):
     log("新客户端连接")
     try:
         async for message in websocket:
-            log(f"收到客户端消息: {message}")
+            try:
+                # 尝试解析 JSON 命令
+                command_data = json.loads(message)
+                if 'command' in command_data:
+                    # 处理命令
+                    response = await handle_websocket_command(command_data)
+                    await websocket.send(json.dumps(response))
+                    log(f"处理命令: {command_data.get('command')}, 响应: {response.get('success', False)}")
+                else:
+                    log(f"收到客户端消息: {message}")
+            except json.JSONDecodeError:
+                # 如果不是 JSON，当作普通消息处理
+                log(f"收到客户端消息: {message}")
     except websockets.ConnectionClosed:
         log("客户端断开连接")
     finally:

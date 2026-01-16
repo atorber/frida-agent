@@ -1,7 +1,7 @@
 {
   "name": "wechat-sidecar",
   "version": "0.1.4",
-  "description": "A WeChat Sidecar Demo for WeChat 3.9.10.19",
+  "description": "A WeChat Sidecar Demo for WeChat 3.9.10.27",
   "main": "index.js",
   "scripts": {
     "lint": "npm run lint:es && npm run lint:ts",

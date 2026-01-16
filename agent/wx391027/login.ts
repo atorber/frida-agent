@@ -1,26 +1,11 @@
-const offsets = {
-    kGetAccountServiceMgr: 0x1C1FE90, // 3.9.10.27
-    OS_USER_HOME: 0x5A7E190, // 来自C++代码
-    OS_USER_WXID: 0x5AB7F30,
-    OS_USER_NAME: 0x5AB8098,
-    OS_USER_MOBILE: 0x5AB7FD8
-}
-
-// 尝试不同的偏移量组合
-const offsetVariants = {
-    wxid: [0, 0x8, 0x10, 0x18, 0x20, -0x8, -0x10],
-    name: [0, 0x8, 0x10, 0x18, 0x20, -0x8, -0x10],
-    mobile: [0, 0x8, 0x10, 0x18, 0x20, -0x8, -0x10]
-};
+import { offsets, offsetVariants } from './offset.js'
+import { getDbHandles, execDbQuery } from './sqlite.js';
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 
 let selfInfo: any = {}
 let homePath: string = '';
 let wxid: string = '';
-
-// 导入sqlite操作相关函数
-import { getDbHandles, execDbQuery } from './sqlite.js';
 
 /*---------------------Base---------------------*/
 
