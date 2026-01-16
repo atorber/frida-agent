@@ -4,6 +4,7 @@
  */
 // @ts-ignore
 import net from '@frida/net';
+// @ts-ignore
 import { HTTPParser } from 'http-parser-js';
 import {
     writeWStringPtr,
