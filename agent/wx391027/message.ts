@@ -176,12 +176,14 @@ export const messageSendText = (contactId: string, text: string, atWxids?: strin
             chat_msg,
             to_user,
             text_msg,
-            wxAters: wxAters.readPointer()
+            wxAters,
+            wxAters_start: wxAters.readPointer()
         });
 
         // 发送文本消息
+        // 注意：wxAters 是 RawVector 结构的指针，应该直接传递，而不是 readPointer()
         console.log(`[MSG] [${new Date().toISOString()}] 步骤6: 开始调用 send 函数...`);
-        const success = send(chat_msg, to_user, text_msg, wxAters.readPointer(), 1, 1, 0, 0);
+        const success = send(chat_msg, to_user, text_msg, wxAters, 1, 1, 0, 0);
         console.log(`[MSG] [${new Date().toISOString()}] 步骤6: send 函数调用完成，耗时: ${Date.now() - step6Time}ms，返回值:`, success);
 
         const step7Time = Date.now();
