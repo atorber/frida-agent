@@ -16,7 +16,9 @@ import {
     initStruct,
     initidStruct,
     initmsgStruct,
-    parseContact
+    parseContact,
+    createWxString,
+    createWxStringVector,
 } from './utils.js'
 
 import {
@@ -27,6 +29,10 @@ import {
 import { offsets } from './offset.js'
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
+
+function splitWxids(wxids: string): string[] {
+    return wxids.split(',').map(s => s.trim()).filter(Boolean)
+}
 
 /*
 获取群列表
@@ -152,57 +158,39 @@ export function roomRawPayload(roomId: string) {
 };
 
 /*
-从群里删除成员
+从群里删除成员（对齐 WCF DelChatroomMember，支持逗号分隔多人）
 */
-export async function roomDel(
+export function roomDel(
     roomId: string,
     contactId: string,
-) {
+): boolean {
     console.log('roomDel:', roomId, contactId)
-    // 调用DelChatroomMember函数
-    const getChatRoomMgrAddr = moduleBaseAddress.add(offsets.kChatRoomMgr);
-    const delChatroomMemberAddr = moduleBaseAddress.add(offsets.kDelChatroomMember);
-    
-    // 定义函数接口
-    const GetChatRoomMgr = new NativeFunction(getChatRoomMgrAddr, 'pointer', []);
-    const DelChatroomMember = new NativeFunction(delChatroomMemberAddr, 'int', ['pointer', 'pointer', 'pointer']);
-    
-    // 创建roomId的WxString
-    const roomIdStr = writeWStringPtr(roomId);
-    
-    // 处理成员ID - 按照C++实现，支持多个ID用逗号分隔
-    // 创建成员矢量结构
-    const memberIds = contactId.split(',');
-    
-    // 为存储成员指针创建数组
-    const ptrSize = Process.pointerSize;
-    const memberPtrs = Memory.alloc(ptrSize * memberIds.length);
-    
-    // 创建每个成员ID的WxString并保存
-    for (let i = 0; i < memberIds.length; i++) {
-        const wxid = memberIds[i].trim();
-        if (wxid) {
-            const wxidPtr = writeWStringPtr(wxid);
-            memberPtrs.add(i * ptrSize).writePointer(wxidPtr);
+    try {
+        if (!roomId || !contactId) {
+            return false
         }
+
+        const GetChatRoomMgr = new NativeFunction(
+            moduleBaseAddress.add(offsets.kChatRoomMgr),
+            'pointer',
+            []
+        )
+        const DelChatroomMember = new NativeFunction(
+            moduleBaseAddress.add(offsets.kDelChatroomMember),
+            'int',
+            ['pointer', 'pointer', 'pointer']
+        )
+
+        const roomIdStr = createWxString(roomId)
+        const vMembers = createWxStringVector(splitWxids(contactId))
+        const mgrPtr = GetChatRoomMgr()
+        const status = DelChatroomMember(mgrPtr, vMembers, roomIdStr)
+        console.log('从群删除成员结果:', status)
+        return status === 1
+    } catch (error) {
+        console.error('roomDel failed:', error)
+        return false
     }
-    
-    // 创建正确的Vector结构
-    const vMembers = Memory.alloc(ptrSize * 3); // 为向量分配内存
-    vMembers.writePointer(memberPtrs); // 起始指针
-    vMembers.add(ptrSize).writePointer(memberPtrs.add(ptrSize * memberIds.length)); // 结束指针
-    vMembers.add(ptrSize * 2).writePointer(ptr('0')); // 容量指针
-    
-    // 获取聊天室管理器实例
-    const mgrPtr = GetChatRoomMgr();
-    console.log('mgrPtr:', mgrPtr);
-    
-    // 调用删除成员函数
-    const status = DelChatroomMember(mgrPtr, vMembers, roomIdStr);
-    
-    console.log('从群删除成员结果:', status);
-    
-    return status === 1;
 }
 
 /*
@@ -216,57 +204,43 @@ export async function roomAvatar(roomId: string) {
 }
 
 /*
-添加成员到群
+添加成员到群（对齐 WCF AddChatroomMember，支持逗号分隔多人）
 */
 export function roomAdd(
     roomId: string,
     wxids: string,
 ): boolean {
     try {
-        // 参数检查
         if (!roomId || !wxids) {
             console.error("房间ID或微信ID为空");
             return false;
         }
 
-        // 调用AddChatroomMember函数
-        const getChatRoomMgrAddr = moduleBaseAddress.add(offsets.kChatRoomMgr);
-        const addChatroomMemberAddr = moduleBaseAddress.add(offsets.kAddChatroomMember);
-        
-        // 定义函数接口
-        const GetChatRoomMgr = new NativeFunction(getChatRoomMgrAddr, 'pointer', []);
-        const AddChatroomMember = new NativeFunction(addChatroomMemberAddr, 'int', ['pointer', 'pointer', 'pointer', 'pointer']);
-        
-        console.log('准备调用AddChatroomMember:');
-        console.log('- roomId:', roomId);
-        console.log('- wxids:', wxids);
+        const GetChatRoomMgr = new NativeFunction(
+            moduleBaseAddress.add(offsets.kChatRoomMgr),
+            'pointer',
+            []
+        )
+        const AddChatroomMember = new NativeFunction(
+            moduleBaseAddress.add(offsets.kAddChatroomMember),
+            'int',
+            ['pointer', 'pointer', 'pointer', 'pointer']
+        )
 
-        // 获取聊天室管理器实例
         const mgrPtr = GetChatRoomMgr();
         if (!mgrPtr || mgrPtr.isNull()) {
             console.error('获取聊天室管理器失败');
             return false;
         }
-        
-        // 1. 创建roomId的WxString
-        const roomIdStr = writeWStringPtr(roomId);
-        
-        // 2. 创建临时数组
-        const temp = Memory.alloc(Process.pointerSize * 2);
-        temp.writeU64(0);
-        temp.add(Process.pointerSize).writeU64(0);
-        
-        // 3. 使用单个成员ID并创建WxString
-        // 创建wxid结构
-        const wxidStr = writeWStringPtr(wxids);
-        
-        // 直接调用函数，使用最简单的方式（只处理单个成员情况）
-        // 注意参数顺序：mgr, wxidVector, roomIdStr, temp
-        const status = AddChatroomMember(mgrPtr, wxidStr, roomIdStr, temp);
-        
-        console.log('添加成员到群结果:', status);
-        
-        return status === 1;
+
+        const roomIdStr = createWxString(roomId)
+        const vMembers = createWxStringVector(splitWxids(wxids))
+        const temp = Memory.alloc(Process.pointerSize * 2)
+        temp.writeByteArray(Array(Process.pointerSize * 2).fill(0))
+
+        const status = AddChatroomMember(mgrPtr, vMembers, roomIdStr, temp)
+        console.log('添加成员到群结果:', status)
+        return status === 1
     } catch (error) {
         console.error('添加成员到群出错:', error);
         return false;
@@ -274,59 +248,34 @@ export function roomAdd(
 }
 
 /*
-邀请成员进群
+邀请成员进群（对齐 WCF InviteChatroomMember）
 */
 export function roomInvite(
     roomId: string,
     wxids: string,
 ): boolean {
     try {
-        // 参数检查
         if (!roomId || !wxids) {
             console.error("房间ID或微信ID为空");
             return false;
         }
 
-        // 获取邀请成员函数地址
-        const inviteChatroomMemberAddr = moduleBaseAddress.add(offsets.kInviteChatroomMember);
-        
-        // 定义函数接口 - 参照C++实现
-        const InviteChatroomMember = new NativeFunction(inviteChatroomMemberAddr, 'int', ['pointer', 'pointer', 'pointer', 'pointer']);
-        
-        console.log('准备调用InviteChatroomMember:');
-        console.log('- roomId:', roomId);
-        console.log('- wxids:', wxids);
-        
-        // 简化实现 - 不尝试创建复杂的向量结构
-        // 创建roomId字符串
-        const wsRoomIdStr = Memory.allocUtf16String(roomId);
-        
-        // 创建简单的wxid字符串
-        const wxidStr = Memory.allocUtf16String(wxids);
-        
-        // 创建一个简单的WxString结构
-        const wxidWxStr = Memory.alloc(Process.pointerSize * 3);
-        wxidWxStr.writePointer(wxidStr);
-        wxidWxStr.add(Process.pointerSize).writeU32(wxids.length);
-        wxidWxStr.add(Process.pointerSize + 4).writeU32(wxids.length * 2);
-        
-        // 创建roomId的WxString
-        const wxRoomId = Memory.alloc(Process.pointerSize * 3);
-        wxRoomId.writePointer(wsRoomIdStr);
-        wxRoomId.add(Process.pointerSize).writeU32(roomId.length);
-        wxRoomId.add(Process.pointerSize + 4).writeU32(roomId.length * 2);
-        
-        // 准备临时数组
-        const temp = Memory.alloc(Process.pointerSize * 2);
-        temp.writeU64(0);
-        temp.add(Process.pointerSize).writeU64(0);
-        
-        // 调用邀请成员函数 - 使用最简单的方法避免内存问题
-        const status = InviteChatroomMember(wsRoomIdStr, wxidWxStr, wxRoomId, temp);
-        
-        console.log('邀请成员进群结果:', status);
-        
-        return status === 1;
+        const InviteChatroomMember = new NativeFunction(
+            moduleBaseAddress.add(offsets.kInviteChatroomMember),
+            'int',
+            ['pointer', 'pointer', 'pointer', 'pointer']
+        )
+
+        // WCF: InviteMembers(wsRoomid.c_str(), pMembers, pWxRoomid, temp)
+        const wsRoomidCstr = Memory.allocUtf16String(roomId)
+        const pWxRoomid = createWxString(roomId)
+        const vMembers = createWxStringVector(splitWxids(wxids))
+        const temp = Memory.alloc(Process.pointerSize * 2)
+        temp.writeByteArray(Array(Process.pointerSize * 2).fill(0))
+
+        const status = InviteChatroomMember(wsRoomidCstr, vMembers, pWxRoomid, temp)
+        console.log('邀请成员进群结果:', status)
+        return status === 1
     } catch (error) {
         console.error('邀请成员进群出错:', error);
         return false;
@@ -334,33 +283,27 @@ export function roomInvite(
 }
 
 /*
-设置群名称 3.9.10.27 未完成
+设置群名称
 */
-export async function roomTopic(roomId: string, topic: string) {
-    let result: any = -1;
-    // 计算instance函数和ModChatRoomTopic函数的地址
-    var instanceAddr = moduleBaseAddress.add(offsets.kOpLogMgr);
-    var modChatRoomTopicAddr = moduleBaseAddress.add(offsets.kModChatRoomTopic);
+export function roomTopic(roomId: string, topic: string): number {
+    try {
+        const Instance = new NativeFunction(moduleBaseAddress.add(offsets.kOpLogMgr), 'pointer', [])
+        const ModChatRoomTopic = new NativeFunction(
+            moduleBaseAddress.add(offsets.kModChatRoomTopic),
+            'uint64',
+            ['pointer', 'pointer', 'pointer']
+        )
 
-    // 定义这两个函数
-    var Instance = new NativeFunction(instanceAddr, 'pointer', []);
-    var ModChatRoomTopic = new NativeFunction(modChatRoomTopicAddr, 'uint64', ['pointer', 'pointer', 'pointer']);
-
-    const instancePtr = Instance();
-    console.log('instancePtr:', instancePtr)
-
-    // 创建roomIdStr和topicStr的内存表示
-    var roomIdStrPtr = writeWStringPtr(roomId);
-    var topicStrPtr = writeWStringPtr(topic);
-
-    console.log('roomId:', readWStringPtr(roomIdStrPtr).readUtf16String());
-    console.log('topic:', readWStringPtr(topicStrPtr).readUtf16String());
-
-    // 调用ModChatRoomTopic
-    // result = ModChatRoomTopic(instancePtr, roomIdStrPtr, topicStrPtr);
-    console.log("ModChatRoomTopic result:", result);
-
-    return result;
+        const instancePtr = Instance()
+        const roomIdStrPtr = createWxString(roomId)
+        const topicStrPtr = createWxString(topic)
+        const result = ModChatRoomTopic(instancePtr, roomIdStrPtr, topicStrPtr)
+        console.log('ModChatRoomTopic result:', result)
+        return Number(result)
+    } catch (error) {
+        console.error('roomTopic failed:', error)
+        return -1
+    }
 }
 
 /*
@@ -398,7 +341,7 @@ export async function roomQuit(roomId: string): Promise<boolean> {
     const myWxid = "self_wxid"; // 这里需要替换成实际获取wxid的方法
     
     // 调用roomDel方法删除自己
-    const result = await roomDel(roomId, myWxid);
+    const result = roomDel(roomId, myWxid);
     
     return result;
 }

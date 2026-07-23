@@ -1,4 +1,3 @@
-import fs from 'fs'
 export const log = (type: string, ...args: any[]) => {
   console.log(`${new Date().toLocaleString()} [${type}] `, ...args)
 }
@@ -324,19 +323,143 @@ export const findIamgePathAddr = (param2: any) => {
     }
 }
 
+const INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+/** WxString 结构大小（x64，对齐 WCF spy_types.h） */
+export const WX_STRING_SIZE = 0x20
+
+export const pathExistsNative = (targetPath: string): boolean => {
+  try {
+    const GetFileAttributesW = new NativeFunction(
+      Module.getExportByName('kernel32.dll', 'GetFileAttributesW'),
+      'uint32',
+      ['pointer']
+    )
+    const pathPtr = Memory.allocUtf16String(targetPath)
+    return GetFileAttributesW(pathPtr) !== INVALID_FILE_ATTRIBUTES
+  } catch (e) {
+    return false
+  }
+}
+
 export const hasPath = (path: string | undefined) => {
   console.log('hasPath:', path)
-    if (path && path.length > 0) {
-      // 如果文件存在，则返回true
-      if (fs.existsSync(path)) {
-        console.log('path is :', path)
-        return true
-      } else {
-        console.log('path is not exist:', path)
-        return false
-      } 
-    }
+  if (!path || path.length === 0) {
     return false
+  }
+  return pathExistsNative(path)
+}
+
+/**
+ * 创建对齐 WCF 的 WxString（size/capacity 为字符数）
+ */
+export const createWxString = (str: string): NativePointer => {
+  const structPtr = Memory.alloc(WX_STRING_SIZE)
+  structPtr.writeByteArray(Array(WX_STRING_SIZE).fill(0))
+  const dataPtr = Memory.alloc((str.length + 1) * 2)
+  dataPtr.writeUtf16String(str)
+  structPtr.writePointer(dataPtr)
+  structPtr.add(Process.pointerSize).writeU32(str.length)
+  structPtr.add(Process.pointerSize + 4).writeU32(str.length)
+  return structPtr
+}
+
+/**
+ * 创建 vector<WxString> 的 RawVector（start/finish/end），元素为内联 WxString
+ */
+export const createWxStringVector = (ids: string[]): NativePointer => {
+  const cleaned = ids.map(s => s.trim()).filter(Boolean)
+  const count = Math.max(cleaned.length, 1)
+  const arrayPtr = Memory.alloc(WX_STRING_SIZE * count)
+  arrayPtr.writeByteArray(Array(WX_STRING_SIZE * count).fill(0))
+
+  if (cleaned.length === 0) {
+    // 空向量占位一个空 WxString
+    arrayPtr.writePointer(Memory.alloc(2))
+  } else {
+    for (let i = 0; i < cleaned.length; i++) {
+      const s = cleaned[i]
+      const dataPtr = Memory.alloc((s.length + 1) * 2)
+      dataPtr.writeUtf16String(s)
+      const item = arrayPtr.add(i * WX_STRING_SIZE)
+      item.writePointer(dataPtr)
+      item.add(Process.pointerSize).writeU32(s.length)
+      item.add(Process.pointerSize + 4).writeU32(s.length)
+    }
+  }
+
+  const used = cleaned.length === 0 ? 1 : cleaned.length
+  const rawVector = Memory.alloc(Process.pointerSize * 3)
+  rawVector.writePointer(arrayPtr)
+  rawVector.add(Process.pointerSize).writePointer(arrayPtr.add(WX_STRING_SIZE * used))
+  rawVector.add(Process.pointerSize * 2).writePointer(arrayPtr.add(WX_STRING_SIZE * used))
+  return rawVector
+}
+
+export const readFileBytes = (filePath: string): Uint8Array | null => {
+  try {
+    // @ts-ignore Frida File API
+    const buf = File.readAllBytes(filePath)
+    if (!buf) {
+      return null
+    }
+    if (buf instanceof ArrayBuffer) {
+      return new Uint8Array(buf)
+    }
+    // 部分环境返回带 buffer 的对象
+    if ((buf as any).buffer) {
+      const anyBuf = buf as any
+      return new Uint8Array(anyBuf.buffer, anyBuf.byteOffset || 0, anyBuf.byteLength || anyBuf.length)
+    }
+    return new Uint8Array(buf as any)
+  } catch (e) {
+    console.error('readFileBytes failed:', e)
+    return null
+  }
+}
+
+export const writeFileBytes = (filePath: string, data: Uint8Array): boolean => {
+  try {
+    ensureParentDirNative(filePath)
+    const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+    // @ts-ignore Frida File API
+    File.writeAllBytes(filePath, buffer)
+    return true
+  } catch (e) {
+    console.error('writeFileBytes failed:', e)
+    return false
+  }
+}
+
+export const ensureParentDirNative = (filePath: string) => {
+  const lastSep = Math.max(filePath.lastIndexOf('\\'), filePath.lastIndexOf('/'))
+  if (lastSep <= 0) {
+    return
+  }
+  const dir = filePath.substring(0, lastSep)
+  if (pathExistsNative(dir)) {
+    return
+  }
+  try {
+    const CreateDirectoryW = new NativeFunction(
+      Module.getExportByName('kernel32.dll', 'CreateDirectoryW'),
+      'int',
+      ['pointer', 'pointer']
+    )
+    const parts = dir.split(/[\\/]/).filter(Boolean)
+    let current = ''
+    if (parts[0] && parts[0].endsWith(':')) {
+      current = `${parts[0]}\\`
+      parts.shift()
+    }
+    for (const part of parts) {
+      current = current.endsWith('\\') ? `${current}${part}` : `${current}\\${part}`
+      if (!pathExistsNative(current)) {
+        CreateDirectoryW(Memory.allocUtf16String(current), ptr(0))
+      }
+    }
+  } catch (e) {
+    console.error('ensureParentDirNative failed:', e)
+  }
 }
 
 // 接收消息

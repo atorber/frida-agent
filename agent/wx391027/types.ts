@@ -20,6 +20,47 @@ export interface Contact {
     phone: string[]; // list of phone numbers
 }
 
+export interface FinderFeedMedia {
+    mediaType: number;
+    url: string;
+    coverUrl: string;
+    thumbUrl: string;
+    width: number;
+    height: number;
+    videoPlayDuration: number;
+}
+
+export interface FinderFeedInfo {
+    objectId: string;
+    feedType: number;
+    nickname: string;
+    avatar: string;
+    desc: string;
+    mediaCount: number;
+    objectNonceId: string;
+    username: string;
+    mediaList: FinderFeedMedia[];
+}
+
+export interface ParsedAppMsg {
+    subType: number;
+    title: string;
+    des: string;
+    url: string;
+    finderFeed?: FinderFeedInfo;
+}
+
+/** 发送链接卡片（对齐 WCF RichText） */
+export interface RichTextMsg {
+    name?: string;
+    account?: string;
+    title?: string;
+    digest?: string;
+    url?: string;
+    thumburl?: string;
+    receiver: string;
+}
+
 // 消息接口定义
 export interface Message {
     id: string;          // 消息的唯一标识符
@@ -32,4 +73,5 @@ export interface Message {
     listenerId?: string;  // 如果是私聊，接收者用户的ID
     mentionIds: string[]; // @提到的人的ID列表，可以为空列表
     isSelf: boolean;      // 是否是自己发送的消息
+    appMsg?: ParsedAppMsg; // type=49 时解析后的应用消息
 }

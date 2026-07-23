@@ -33,25 +33,6 @@ contactList(): Contact[]
 contactRawPayload(wxid: string): ContactInfo
 ```
 
-## 群聊模块 (`room.ts`)
-
-```typescript
-// 获取所有群聊
-roomList(): Room[]
-
-// 获取群聊详情
-roomRawPayload(roomId: string): RoomInfo
-
-// 添加成员 (40人以下群)
-roomAdd(roomId: string, contactId: string): number
-
-// 邀请成员 (40人以上群)
-roomInvite(roomId: string, contactId: string): number
-
-// 移除成员
-roomDel(roomId: string, contactId: string): number
-```
-
 ## 消息模块 (`message.ts`)
 
 ```typescript
@@ -64,6 +45,12 @@ messageSendImage(contactId: string, path: string): number
 // 发送文件
 messageSendFile(contactId: string, path: string): number
 
+// 发送链接卡片
+messageSendRichText(rt: RichTextMsg): number
+
+// 发送表情/GIF
+messageSendEmotion(contactId: string, path: string): number
+
 // 发送拍一拍
 messageSendPat(roomId: string, contactId: string): number
 
@@ -73,8 +60,48 @@ messageForward(msgId: number, receiver: string): number
 // 下载附件
 downloadAttach(id: number, thumb: string, extra: string): number
 
-// 刷新朋友圈
+// 解密图片 (.dat XOR)
+decryptImage(src: string, dir: string): string
+
+// 导出语音 (silk；已有 mp3 则返回 mp3)
+getAudio(id: number, dir: string): string
+
+// 消息类型表
+getMsgTypes(): { [key: number]: string }
+
+// 刷新朋友圈（需先 listenPyq）
 refreshPyq(id: number): number
+```
+
+## 接收控制 (`recv.ts`)
+
+```typescript
+enableRecvMsg(handler?): boolean
+disableRecvMsg(): boolean
+listenPyq(handler?): boolean
+unListenPyq(): boolean
+```
+
+## 群聊模块 (`room.ts`)
+
+```typescript
+// 获取所有群聊
+roomList(): Room[]
+
+// 获取群聊详情
+roomRawPayload(roomId: string): RoomInfo
+
+// 添加成员 (40人以下群，wxids 逗号分隔)
+roomAdd(roomId: string, wxids: string): boolean
+
+// 邀请成员 (40人以上群)
+roomInvite(roomId: string, wxids: string): boolean
+
+// 移除成员
+roomDel(roomId: string, wxids: string): boolean
+
+// 修改群名
+roomTopic(roomId: string, topic: string): number
 ```
 
 ## 数据库模块 (`sqlite.ts`)

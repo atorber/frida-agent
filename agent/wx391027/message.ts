@@ -16,13 +16,21 @@ import {
     initStruct,
     initidStruct,
     initmsgStruct,
-    parseContact
+    parseContact,
+    createWxString,
+    createWxStringVector,
+    WX_STRING_SIZE,
+    readFileBytes,
+    writeFileBytes,
+    ensureParentDirNative,
 } from './utils.js'
 
 import {
-    getLocalIdAndDbIdx
+    getLocalIdAndDbIdx,
+    getAudioData,
 } from './sqlite.js'
 
+import { RichTextMsg } from './types.js'
 import { offsets } from './offset.js'
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
@@ -373,6 +381,125 @@ export const messageForward = (msgId: number, receiver: string): number => {
     return success;
 }
 
+/** 发送链接卡片消息（对齐 WCF SendRichTextMessage） */
+export const messageSendRichText = (rt: RichTextMsg): number => {
+    try {
+        if (!rt || !rt.receiver) {
+            console.error('messageSendRichText: receiver 为空')
+            return -1
+        }
+
+        const SRTM_SIZE = 0x3F0
+        const funcNew = new NativeFunction(moduleBaseAddress.add(offsets.OS_RTM_NEW), 'pointer', ['pointer'])
+        const funcFree = new NativeFunction(moduleBaseAddress.add(offsets.OS_RTM_FREE), 'void', ['pointer'])
+        const getAppMsgMgr = new NativeFunction(moduleBaseAddress.add(offsets.OS_GET_APP_MSG_MGR), 'pointer', [])
+        const sendRichText = new NativeFunction(
+            moduleBaseAddress.add(offsets.OS_SEND_RICH_TEXT),
+            'int64',
+            ['pointer', 'pointer', 'pointer']
+        )
+
+        const buff = Memory.alloc(SRTM_SIZE)
+        buff.writeByteArray(Array(SRTM_SIZE).fill(0))
+        funcNew(buff)
+
+        const pReceiver = createWxString(rt.receiver || '')
+        const pTitle = createWxString(rt.title || '')
+        const pUrl = createWxString(rt.url || '')
+        const pThumburl = createWxString(rt.thumburl || '')
+        const pDigest = createWxString(rt.digest || '')
+        const pAccount = createWxString(rt.account || '')
+        const pName = createWxString(rt.name || '')
+
+        Memory.copy(buff.add(0x8), pTitle, WX_STRING_SIZE)
+        Memory.copy(buff.add(0x48), pUrl, WX_STRING_SIZE)
+        Memory.copy(buff.add(0xB0), pThumburl, WX_STRING_SIZE)
+        Memory.copy(buff.add(0xF0), pDigest, WX_STRING_SIZE)
+        Memory.copy(buff.add(0x2C0), pAccount, WX_STRING_SIZE)
+        Memory.copy(buff.add(0x2E0), pName, WX_STRING_SIZE)
+
+        const mgr = getAppMsgMgr()
+        const status = sendRichText(mgr, pReceiver, buff)
+        funcFree(buff)
+        return Number(status)
+    } catch (error) {
+        console.error('messageSendRichText failed:', error)
+        return -1
+    }
+}
+
+/** 发送表情/GIF（对齐 WCF SendEmotionMessage） */
+export const messageSendEmotion = (contactId: string, path: string): number => {
+    try {
+        if (!contactId || !path) {
+            console.error('messageSendEmotion: 参数为空')
+            return -1
+        }
+
+        const getEmotionMgr = new NativeFunction(
+            moduleBaseAddress.add(offsets.OS_GET_EMOTION_MGR),
+            'pointer',
+            []
+        )
+        const sendEmotion = new NativeFunction(
+            moduleBaseAddress.add(offsets.OS_SEND_EMOTION),
+            'int64',
+            ['pointer', 'pointer', 'pointer', 'pointer', 'int32', 'pointer', 'int32', 'pointer']
+        )
+
+        const pWxPath = createWxString(path)
+        const pWxWxid = createWxString(contactId)
+        const buff = Memory.alloc(0x20)
+        buff.writeByteArray(Array(0x20).fill(0))
+
+        const mgr = getEmotionMgr()
+        const status = sendEmotion(mgr, pWxPath, buff, pWxWxid, 2, buff, 0, buff)
+        return Number(status) >= 0 ? 1 : -1
+    } catch (error) {
+        console.error('messageSendEmotion failed:', error)
+        return -1
+    }
+}
+
+/** 消息类型表（对齐 WCF GetMsgTypes） */
+export const getMsgTypes = (): { [key: number]: string } => {
+    return {
+        0x00: '朋友圈消息',
+        0x01: '文字',
+        0x03: '图片',
+        0x22: '语音',
+        0x25: '好友确认',
+        0x28: 'POSSIBLEFRIEND_MSG',
+        0x2A: '名片',
+        0x2B: '视频',
+        0x2F: '石头剪刀布 | 表情图片',
+        0x30: '位置',
+        0x31: '共享实时位置、文件、转账、链接',
+        0x32: 'VOIPMSG',
+        0x33: '微信初始化',
+        0x34: 'VOIPNOTIFY',
+        0x35: 'VOIPINVITE',
+        0x3E: '小视频',
+        0x42: '微信红包',
+        0x270F: 'SYSNOTICE',
+        0x2710: '红包、系统消息',
+        0x2712: '撤回消息',
+        0x100031: '搜狗表情',
+        0x1000031: '链接',
+        0x1A000031: '微信红包',
+        0x20010031: '红包封面',
+        0x2D000031: '视频号视频',
+        0x2E000031: '视频号名片',
+        0x31000031: '引用消息',
+        0x37000031: '拍一拍',
+        0x3A000031: '视频号直播',
+        0x3A100031: '商品链接',
+        0x3A200031: '视频号直播',
+        0x3E000031: '音乐链接',
+        0x41000031: '文件',
+    }
+}
+
 /**
  * 刷新朋友圈
  * @param id 朋友圈ID，0表示刷新第一页，非0表示获取下一页
@@ -488,10 +615,10 @@ export const downloadAttach = (id: number, thumb: string, extra: string): number
         // 获取相关函数地址
         const newChatMsgAddr = moduleBaseAddress.add(offsets.OS_NEW);
         const freeChatMsgAddr = moduleBaseAddress.add(offsets.OS_FREE);
-        const getChatMgrAddr = moduleBaseAddress.add(0x1C51CF0); // 获取聊天管理器的偏移量
-        const getPreDownloadMgrAddr = moduleBaseAddress.add(0x1CD87E0); // 获取预下载管理器的偏移量
-        const pushAttachTaskAddr = moduleBaseAddress.add(0x1DA69C0); // 任务推送函数的偏移量
-        const getMgrByPrefixLocalIdAddr = moduleBaseAddress.add(0x2206280); // 获取管理器的偏移量
+        const getChatMgrAddr = moduleBaseAddress.add(offsets.OS_GET_CHAT_MGR);
+        const getPreDownloadMgrAddr = moduleBaseAddress.add(offsets.OS_GET_PRE_DOWNLOAD_MGR);
+        const pushAttachTaskAddr = moduleBaseAddress.add(offsets.OS_PUSH_ATTACH_TASK);
+        const getMgrByPrefixLocalIdAddr = moduleBaseAddress.add(offsets.OS_GET_MGR_BY_PREFIX_LOCAL_ID);
 
         // 创建NativeFunction对象
         const newChatMsg = new NativeFunction(newChatMsgAddr, 'pointer', ['pointer']);
@@ -591,14 +718,13 @@ export const downloadAttach = (id: number, thumb: string, extra: string): number
 }
 
 /**
- * 解密图片
+ * 解密图片（对齐 WCF DecryptImage：XOR 解 .dat）
  * @param src 源文件路径
- * @param dir 目标目录
+ * @param dir 目标目录（空则同目录换扩展名）
  * @returns 解密后的文件路径
  */
 export const decryptImage = (src: string, dir: string): string => {
     try {
-        // 定义图片格式的头部字节
         const HEADER_PNG1 = 0x89;
         const HEADER_PNG2 = 0x50;
         const HEADER_JPG1 = 0xFF;
@@ -606,35 +732,28 @@ export const decryptImage = (src: string, dir: string): string => {
         const HEADER_GIF1 = 0x47;
         const HEADER_GIF2 = 0x49;
 
-        // 检查文件是否存在
         if (!hasPath(src)) {
             console.error('文件不存在:', src);
             return '';
         }
 
-        // 读取文件内容 - 这里修改为更合适的文件读取方式
-        // 假设readAll函数返回Uint8Array类型
-        const fileData = new Uint8Array(); // 实际使用时要替换为文件读取函数
-        if (!fileData || fileData.length === 0) {
+        const fileData = readFileBytes(src);
+        if (!fileData || fileData.length < 2) {
             console.error('读取文件失败:', src);
             return '';
         }
 
-        // 确定文件类型和解密密钥
         let key = 0;
         let ext = '';
 
-        // PNG判断
         key = HEADER_PNG1 ^ fileData[0];
         if ((HEADER_PNG2 ^ key) === fileData[1]) {
             ext = '.png';
         } else {
-            // JPG判断
             key = HEADER_JPG1 ^ fileData[0];
             if ((HEADER_JPG2 ^ key) === fileData[1]) {
                 ext = '.jpg';
             } else {
-                // GIF判断
                 key = HEADER_GIF1 ^ fileData[0];
                 if ((HEADER_GIF2 ^ key) === fileData[1]) {
                     ext = '.gif';
@@ -645,30 +764,31 @@ export const decryptImage = (src: string, dir: string): string => {
             }
         }
 
-        // 解密文件内容
         const decryptedData = new Uint8Array(fileData.length);
         for (let i = 0; i < fileData.length; i++) {
             decryptedData[i] = fileData[i] ^ key;
         }
 
-        // 确定输出路径
-        let dst = '';
-        const pathObj = new URL('file://' + src);
-        const fileName = pathObj.pathname.slice(pathObj.pathname.lastIndexOf('/') + 1, pathObj.pathname.lastIndexOf('.'));
+        const normalize = (p: string) => p.replace(/\//g, '\\');
+        const srcNorm = normalize(src);
+        const lastSlash = Math.max(srcNorm.lastIndexOf('\\'), srcNorm.lastIndexOf('/'));
+        const lastDot = srcNorm.lastIndexOf('.');
+        const fileName = lastDot > lastSlash
+            ? srcNorm.substring(lastSlash + 1, lastDot)
+            : srcNorm.substring(lastSlash + 1);
 
-        if (dir === '') {
-            dst = src.slice(0, src.lastIndexOf('.')) + ext;
+        let dst = '';
+        if (!dir) {
+            dst = (lastDot > lastSlash ? srcNorm.substring(0, lastDot) : srcNorm) + ext;
         } else {
-            dst = (dir.endsWith('/') || dir.endsWith('\\')) ? dir : (dir + '/');
-            dst += fileName + ext;
+            const base = dir.endsWith('\\') || dir.endsWith('/') ? dir : (dir + '\\');
+            dst = normalize(base) + fileName + ext;
         }
 
-        // 替换Windows路径分隔符
-        dst = dst.replace(/\\/g, '/');
-
-        // 写入解密后的文件
-        // 这里需要调用文件写入API，Frida需要使用native API
-
+        if (!writeFileBytes(dst, decryptedData)) {
+            console.error('写入解密文件失败:', dst);
+            return '';
+        }
         return dst;
     } catch (error) {
         console.error('解密图片失败:', error);
@@ -677,34 +797,39 @@ export const decryptImage = (src: string, dir: string): string => {
 }
 
 /**
- * 获取语音消息并转换为MP3
+ * 获取语音消息数据并落盘（对齐 WCF GetAudio）
+ * Frida 环境无 Codec.lib，先导出 silk；若目录下已有同名 mp3 则直接返回。
  * @param id 消息ID
  * @param dir 保存目录
- * @returns MP3文件路径
+ * @returns 文件路径（优先 .mp3，否则 .silk）
  */
 export const getAudio = (id: number, dir: string): string => {
     try {
-        // 确定MP3文件路径
-        let mp3path = (dir.endsWith('/') || dir.endsWith('\\')) ? dir : (dir + '/');
-        mp3path += id.toString() + '.mp3';
-        
-        // 替换Windows路径分隔符
-        mp3path = mp3path.replace(/\\/g, '/');
-        
-        // 检查文件是否已存在
+        const baseDir = (dir.endsWith('/') || dir.endsWith('\\')) ? dir : (dir + '\\');
+        const mp3path = (baseDir + id.toString() + '.mp3').replace(/\//g, '\\');
+        const silkPath = (baseDir + id.toString() + '.silk').replace(/\//g, '\\');
+
         if (hasPath(mp3path)) {
             return mp3path;
         }
-        
-        // 获取语音数据（需要调用native API）
-        // 这部分需要实现获取音频数据的功能，可能需要查询数据库
+        if (hasPath(silkPath)) {
+            return silkPath;
+        }
 
-        // 将silk格式转换为MP3
-        // 这部分需要调用转换函数，Frida可能需要使用native API
-        
-        console.log('语音消息转换为MP3:', mp3path);
-        
-        return mp3path;
+        const silk = getAudioData(id);
+        if (!silk || silk.length === 0) {
+            console.error('Empty audio data.');
+            return '';
+        }
+
+        ensureParentDirNative(silkPath);
+        if (!writeFileBytes(silkPath, silk)) {
+            console.error('写入 silk 失败:', silkPath);
+            return '';
+        }
+
+        console.log('语音已导出为 silk（无内置 silk→mp3，可外部转码）:', silkPath);
+        return silkPath;
     } catch (error) {
         console.error('获取语音失败:', error);
         return '';
@@ -712,70 +837,19 @@ export const getAudio = (id: number, dir: string): string => {
 }
 
 /**
- * 撤回消息
- * @param id 消息ID
- * @returns 成功返回1，失败返回-1
+ * 撤回消息（与 WCF 同样暂不可用）
  */
 export const revokeMsg = (id: number): number => {
     try {
-        // 获取localId和dbIdx
         const result = getLocalIdAndDbIdx(id);
         if (!result) {
             console.error('获取消息localId失败，请检查消息ID:', id);
             return -1;
         }
-
-        const { localId, dbIdx } = result;
-
-        console.log(`尝试撤回消息 ID: ${id}, LocalId: ${localId}, DbIdx: ${dbIdx}`);
-
-        // 注意：此功能在C++版本中没有完全实现
-        // 原因："自己发的消息没法直接获得msgid"
-        console.warn('撤回消息功能尚未完全实现');
-
-        // 如果需要完整实现，需要增加相关API调用
-        
+        console.warn('撤回消息功能尚未完全实现（与 WCF 一致）');
         return -1;
     } catch (error) {
         console.error('撤回消息失败:', error);
         return -1;
     }
-}
-
-/*
-发送联系人名片
-*/
-async function messageSendContact(
-    conversationId: string,
-    contactId: string,
-): Promise<void> {
-
-}
-
-/*
-发送链接消息
-*/
-async function messageSendUrl(
-    conversationId: string,
-    urlLinkPayload: any,
-): Promise<void> {
-}
-
-/*
-发送小程序消息
-*/
-async function messageSendMiniProgram(
-    conversationId: string,
-    miniProgramPayload: any,
-): Promise<void> {
-
-}
-
-/*
-发送位置消息
-*/
-async function messageSendLocation(
-    conversationId: string,
-    locationPayload: any,
-): Promise<void | string> {
 }

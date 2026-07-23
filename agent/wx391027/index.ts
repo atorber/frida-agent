@@ -30,6 +30,10 @@ import {
     Contact,
     Message,
 } from './types.js'
+import {
+    parseAppMsg,
+    getFileNameFromAppMsg,
+} from './appMsgParser.js'
 
 import {
     checkLogin,
@@ -48,7 +52,8 @@ import {
     roomRawPayload,
     roomAdd,
     roomInvite,
-    roomDel
+    roomDel,
+    roomTopic,
 } from './room.js'
 
 import {
@@ -57,11 +62,20 @@ import {
     messageSendFile,
     messageSendPat,
     messageForward,
+    messageSendRichText,
+    messageSendEmotion,
     getFirstPage,
     getNextPage,
     decryptImage,
-    downloadAttach
+    downloadAttach,
+    refreshPyq,
+    getAudio,
+    getMsgTypes,
 } from './message.js'
+import {
+    downloadFinderFeedVideo,
+    buildFinderVideoSavePath,
+} from './httpDownload.js'
 
 import {
     getDbHandles,
@@ -71,6 +85,16 @@ import {
     execDbQuery,
     getLocalIdAndDbIdx
 } from './sqlite.js'
+
+import {
+    enableRecvMsg,
+    disableRecvMsg,
+    listenPyq,
+    unListenPyq,
+    isRecvMsgEnabled,
+    isRecvPyqEnabled,
+    setMsgHandler,
+} from './recv.js'
 
 import { offsets } from './offset.js'
 
@@ -123,190 +147,46 @@ function initializeUserInfo() {
 setImmediate(() => {
     try {
         initializeUserInfo()
-        // 初始化完成后，再初始化消息 Hook
         setTimeout(() => {
             initializeMessageHook()
-        }, 1000) // 延迟1秒，确保微信完全初始化
+        }, 1000)
     } catch (e) {
         console.error('初始化失败:', e)
     }
 })
 
-// const firstPage = getFirstPage()
-// log('firstPage', 'firstPage:', firstPage)
-
-// const nextPage = getNextPage(firstPage)
-// log('nextPage', 'nextPage:', nextPage)
-
-/*---------------------Contact---------------------*/
-
-// log('contact', '查询登录状态/checkLogin done:', checkLogin())
-
-// log('contact', '获取登录账号信息/contactSelfInfo done:', JSON.stringify(contactSelfInfo()))
-
-// log('contact', '获取联系人/contactList done:', JSON.stringify(contactList().length))
-
-// log('contact', 'call contactRawPayload() res:\n', JSON.stringify(contactRawPayload('ledongmao')))
-
-/*---------------------Room---------------------*/
-
-// log('room', 'call roomList() res:\n', JSON.stringify(roomList().length))
-
-// log('room', 'call roomRawPayload() res:\n', JSON.stringify(roomRawPayload('21341182572@chatroom')))
-
-
-// roomTopic('21341182572@chatroom', '大师是群主111')
-
-// roomMemberList('21341182572@chatroom')
-
-/*---------------------Room Invitation---------------------*/
-
-
-/*---------------------Friendship---------------------*/
-
-
-/*---------------------Tag---------------------*/
-
-
-/*---------------------Message---------------------*/
-// messageSendText('filehelper', `hello world ${new Date().toLocaleString()}`)
-// messageSendText('21341182572@chatroom', `hello world ${new Date().toLocaleString()}`, ['notify@all'])
-// messageSendText('21341182572@chatroom', 'hello world all', ['notify@all'])
-// messageSendText('21341182572@chatroom', 'hello world', ['ledongmao', 'wxid_pnza7m7kf9tq12'])
-// messageSendText('21341182572@chatroom', `hello world ${Math.random().toString(4).substring(2, 4)} ${new Date().toLocaleString()}`, ['tyutluyc'])
-// messageSendText('21341182572@chatroom', `hello world ${Math.random().toString(4).substring(2, 4)} ${new Date().toLocaleString()}`, ['ledongmao'])
-
-const path = 'C:\\GitHub\\frida-agent\\agent\\1.jpg'
-// messageSendImage('21341182572@chatroom', path)
-
-// messageSendFile('21341182572@chatroom', path)
-
-// messageSendPat('21341182572@chatroom', 'ledongmao')
-
-// roomAdd('25172281579@chatroom', 'ledongmao')
-// roomInvite('25172281579@chatroom', 'ledongmao')
-// messageSendText('25172281579@chatroom', 'hello world',['notify@all'])
-
-// roomDel('21341182572@chatroom', 'ledongmao')
-// messageSendText('21341182572@chatroom', 'hello world')
-
 /*---------------------Hook---------------------*/
-/*
-接收消息回调 3.9.10.27
-延迟初始化，避免在脚本加载时立即 Hook
-*/
-let recvMsgNativeCallback: any = null;
+function onRecvChatMessage(msg: Message) {
+    try {
+        if (msg.type === 49) {
+            const appMsg = parseAppMsg(msg.text) ?? undefined
+            msg.appMsg = appMsg
+            if (appMsg?.subType === 6) {
+                const filename = getFileNameFromAppMsg(msg.text, selfInfo.id) ?? ''
+                if (filename) {
+                    msg.filename = filename
+                    console.log('filename:', filename)
+                }
+            }
+        }
+        handleMsg(msg)
+    } catch (e) {
+        console.error('处理接收消息失败：', e)
+    }
+}
+
+function onRecvPyqMessage(msg: Message) {
+    console.log('朋友圈消息:', JSON.stringify(msg, null, 2))
+    if (pushConfig.enabled) {
+        sendMessagePush(msg)
+    }
+}
 
 function initializeMessageHook() {
-    try {
-        const nativeCallback = new NativeCallback(() => { }, 'void', ['int32', 'pointer', 'pointer', 'pointer', 'pointer', 'int32'])
-        const nativeativeFunction = new NativeFunction(nativeCallback, 'void', ['int32', 'pointer', 'pointer', 'pointer', 'pointer', 'int32'])
-
-        Interceptor.attach(
-            moduleBaseAddress.add(offsets.kDoAddMsg), {
-            onEnter(args) {
-                try {
-                    // 参数打印
-                    // console.log("doAddMsg called with args: " + args[0] + ", " + args[1] + ", " + args[2]);
-
-                    // 调用处理函数
-                    const msg = HandleSyncMsg(args[0], args[1], args[2]);
-                    // console.log("msg: " + JSON.stringify(msg, null, 2));
-                    let room = ''
-                    let talkerId = ''
-                    let listenerId = ''
-                    const text = msg.content
-                    const signature = msg.signature
-                    const msgType = msg.type
-                    const isSelf = msg.isSelf
-                    let filename = ''
-
-                    if (msg.fromUser.indexOf('@') !== -1) {
-                        room = msg.fromUser
-                    } else if (msg.toUser && msg.toUser.indexOf('@') !== -1) {
-                        room = msg.toUser
-                        talkerId = msg.fromUser
-                    }
-
-                    if (room && msg.toUser) {
-                        talkerId = msg.toUser
-                    } else if (room && !msg.toUser) {
-                        talkerId = ''
-                    } else {
-                        if (msg.isSelf) {
-                            talkerId = ''
-                            listenerId = msg.fromUser
-
-                        } else {
-                            talkerId = msg.fromUser
-                        }
-                    }
-
-                    if (msgType === 3) {
-                        filename = JSON.parse(msg.content)[0]
-                    }
-
-                    if (msgType === 49) {
-                        const content = msg.content as string
-                        // <title>example_upsert.json</title>\n        <des></des>\n        <action>view</action>\n        <type>6</type>\n   
-                        // 使用正则提取出文件名和type
-                        const subType = content.match(/<type>(\d+)<\/type>/)
-                        if (subType && subType[1] === '6') {
-                            const filenames = content.match(/<title>(.*)<\/title>/)
-                            if (filenames) {
-                                const curTime = new Date()
-                                filename = `${selfInfo.id}\\FileStorage\\File\\${curTime.getFullYear()}-${curTime.getMonth() < 9 ? '0' : ''}${curTime.getMonth() + 1}\\${filenames[1]}`
-                                console.log('filename:', filename)
-                            }
-                        }
-                    }
-
-                    const message: Message = {
-                        id: msg.msgId,
-                        filename, // 只有在发送文件时需要
-                        text,
-                        timestamp: msg.createTime,
-                        type: msgType,
-                        talkerId,
-                        roomId: room,
-                        mentionIds: [],
-                        listenerId, // 在一对一聊天中使用
-                        isSelf,
-                    }
-
-                    handleMsg(message)
-
-                    // send(message)
-                    const myContentPtr = Memory.alloc(text.length * 2 + 1)
-                    myContentPtr.writeUtf16String(text)
-
-                    const myTalkerIdPtr = Memory.alloc(talkerId.length * 2 + 1)
-                    myTalkerIdPtr.writeUtf16String(talkerId)
-
-                    const myGroupMsgSenderIdPtr = Memory.alloc(room.length * 2 + 1)
-                    myGroupMsgSenderIdPtr.writeUtf16String(room)
-
-                    const myXmlContentPtr = Memory.alloc(signature.length * 2 + 1)
-                    myXmlContentPtr.writeUtf16String(signature)
-
-                    const isMyMsg = 0
-                    const newMsg = {
-                        msgType, talkerId, text, room, signature, isMyMsg
-                    }
-                    // console.log('agent 回调消息:', JSON.stringify(newMsg))
-                    setImmediate(() => nativeativeFunction(msgType, myTalkerIdPtr, myContentPtr, myGroupMsgSenderIdPtr, myXmlContentPtr, isMyMsg))
-
-                } catch (e: any) {
-                    console.error('接收消息回调失败：', e)
-                    throw new Error(e)
-                }
-            },
-        })
-        recvMsgNativeCallback = nativeCallback
-        console.log('消息 Hook 初始化成功')
-    } catch (e) {
-        console.error('回调消息失败：', e)
-        recvMsgNativeCallback = null
+    setMsgHandler(onRecvChatMessage)
+    const ok = enableRecvMsg(onRecvChatMessage)
+    if (!ok) {
+        console.error('消息 Hook 初始化失败')
     }
 }
 
@@ -417,87 +297,35 @@ const handleMsg = (msg: Message) => {
         // }, 5000)
         downloadAttach(Number(id), '', filename)
     }
+
+    if (msg.type === 49 && msg.appMsg?.subType === 51 && msg.appMsg.finderFeed) {
+        const feed = msg.appMsg.finderFeed
+        const media = feed.mediaList[0]
+        const savePath = buildFinderVideoSavePath(id)
+        console.log('视频号消息:', JSON.stringify({
+            nickname: feed.nickname,
+            desc: feed.desc,
+            avatar: feed.avatar,
+            objectId: feed.objectId,
+            username: feed.username,
+            videoUrl: media?.url,
+            coverUrl: media?.coverUrl,
+            duration: media?.videoPlayDuration,
+            width: media?.width,
+            height: media?.height,
+            savePath,
+        }, null, 2))
+
+        if (media?.url) {
+            downloadFinderFeedVideo(id, media.url, savePath)
+                .then(path => console.log('视频号视频下载完成:', path))
+                .catch(err => console.error('视频号视频下载失败:', err.message || err))
+        }
+    }
  
 }
 
-function HandleSyncMsg(param1: NativePointer, param2: any, param3: any) {
-    console.log("HandleSyncMsg called with param2: " + param2);
-    // findIamgePathAddr(param2)
-
-    /* Receive Message:
-        Hook,  call, msgId, type, isSelf, ts, roomId, content, wxid, sign, thumb, extra, msgXml */
-    // { 0x00, 0x2205510, 0x30, 0x38, 0x3C, 0x44, 0x48, 0x88, 0x240, 0x260, 0x280, 0x2A0, 0x308 },
-
-    const msg: WeChatMessage = {
-        fromUser: '',
-        toUser: '',
-        content: '',
-        signature: '',
-        msgId: '',
-        msgSequence: 0,
-        createTime: 0,
-        displayFullContent: '',
-        type: 0,
-        isSelf: false,
-    }
-
-    msg.msgId = param2.add(0x30).readS64() // 消息ID
-    // console.log("msg.msgId: " + msg.msgId);
-    msg.type = param2.add(0x38).readS32(); // 消息类型
-    // console.log("msg.type: " + msg.type);
-    msg.isSelf = param2.add(0x3C).readS32() === 1; // 是否自己发送的消息
-    // console.log("msg.isSelf: " + msg.isSelf);
-    msg.createTime = param2.add(0x44).readS32() // 创建时间
-    // console.log("msg.createTime: " + msg.createTime);
-    msg.content = readWideString(param2.add(0x88)) // 消息内容
-    // console.log("msg.content: " + msg.content);
-    msg.toUser = readWideString(param2.add(0x240)) // 消息签名
-    // console.log("msg.toUser: " + msg.toUser);
-    msg.fromUser = readWideString(param2.add(0x48)) // 发送者
-    // console.log("msg.fromUser: " + msg.fromUser);
-    msg.signature = ReadWeChatStr(param2.add(0x260)) // 消息签名
-    // console.log("msg.signature: " + msg.signature);
-
-    const msgXml = getStringByStrAddr(param2.add(0x308)) // 消息签名
-    console.log("msg.msgXml: " + msgXml);
-
-    // 根据消息类型处理图片消息
-    if (msg['type'] == 3) {
-        const thumb = getStringByStrAddr(param2.add(0x280)) // 消息签名
-        // console.log("msg.thumb: " + thumb);
-
-        const extra = getStringByStrAddr(param2.add(0x2A0)) // 消息签名
-        // console.log("msg.extra: " + extra);
-        // const img = ReadSKBuiltinBuffer(param2.add(0x40).readS64()); // 读取图片数据
-        // console.log("img: " + img);
-        // msg.base64Img = img; // 将图片数据编码为Base64字符串
-        // findIamgePathAddr(param2)
-        msg.base64Img = ''
-        msg.content = JSON.stringify([
-            thumb, //  PUPPET.types.Image.Unknown
-            thumb, //  PUPPET.types.Image.Thumbnail
-            extra, //  PUPPET.types.Image.HD
-            extra, //  PUPPET.types.Image.Artwork
-        ])
-
-    }
-    // console.log("HandleSyncMsg msg: " + JSON.stringify(msg, null, 2));
-    return msg;
-}
-
-/*---------------------SQLite---------------------*/
-// log('sqlite', 'call getDbHandles() res:\n', JSON.stringify(getDbHandles()))
-
-// 延迟执行数据库操作，避免在脚本加载时访问数据库
-// const dbNames = getDbNames()
-// log('sqlite', '获取可查询数据库/getDbNames() done:\n', JSON.stringify(dbNames))
-
-// log('sqlite', '获取数据库所有表/getDbTables() done:\n', JSON.stringify(getDbTables('MicroMsg.db')))
-
-// const sql = 'select UserName,Alias,NickName,Remark,LabelIDList,DomainList,ChatRoomType,BigHeadImgUrl,SmallHeadImgUrl,ChatRoomNotify from Contact where NickName!="" limit 2;'
-
-// log('sqlite', 'execDbQuery() done:\n', JSON.stringify(execDbQuery('MicroMsg.db', sql), null, 2))
-
+/*---------------------SQLite / Export---------------------*/
 export {
     checkLogin,
     contactSelfInfo,
@@ -505,11 +333,26 @@ export {
     contactRawPayload,
     roomList,
     roomRawPayload,
+    roomAdd,
+    roomInvite,
+    roomDel,
+    roomTopic,
     messageSendText,
     messageSendImage,
     messageSendFile,
     messageSendPat,
     messageForward,
+    messageSendRichText,
+    messageSendEmotion,
+    downloadAttach,
+    decryptImage,
+    getAudio,
+    refreshPyq,
+    getMsgTypes,
+    enableRecvMsg,
+    disableRecvMsg,
+    listenPyq,
+    unListenPyq,
     getDbHandles,
     getMsgDbHandle,
     getDbNames,
@@ -518,8 +361,6 @@ export {
     getLocalIdAndDbIdx
 }
 
-// 添加 RPC 导出（可选，用于 Python 调用）
-// 如果只需要 HTTP 控制，可以注释掉这部分
 rpc.exports = {
     checkLogin: checkLogin,
     contactSelfInfo: contactSelfInfo,
@@ -527,11 +368,28 @@ rpc.exports = {
     contactRawPayload: contactRawPayload,
     roomList: roomList,
     roomRawPayload: roomRawPayload,
+    roomAdd: roomAdd,
+    roomInvite: roomInvite,
+    roomDel: roomDel,
+    roomTopic: roomTopic,
     messageSendText: messageSendText,
     messageSendImage: messageSendImage,
     messageSendFile: messageSendFile,
     messageSendPat: messageSendPat,
     messageForward: messageForward,
+    messageSendRichText: messageSendRichText,
+    messageSendEmotion: messageSendEmotion,
+    downloadAttach: downloadAttach,
+    decryptImage: decryptImage,
+    getAudio: getAudio,
+    refreshPyq: refreshPyq,
+    getMsgTypes: getMsgTypes,
+    enableRecvMsg: enableRecvMsg,
+    disableRecvMsg: disableRecvMsg,
+    listenPyq: listenPyq,
+    unListenPyq: unListenPyq,
+    isRecvMsgEnabled: isRecvMsgEnabled,
+    isRecvPyqEnabled: isRecvPyqEnabled,
     getDbHandles: getDbHandles,
     getMsgDbHandle: getMsgDbHandle,
     getDbNames: getDbNames,
@@ -913,7 +771,297 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                 res.code = 0;
                 res.msg = '方法错误: 需要使用 POST';
             }
-        } 
+        }
+        else if (path === '/api/message/richText') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (!body.receiver) {
+                    res.code = 0;
+                    res.msg = '参数错误: 需要 receiver';
+                } else {
+                    res.data = messageSendRichText(body);
+                }
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
+        else if (path === '/api/message/emotion') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (body.contactId && body.path) {
+                    res.data = messageSendEmotion(body.contactId, body.path);
+                } else {
+                    res.code = 0;
+                    res.msg = '参数错误: 需要 contactId 和 path';
+                }
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
+        else if (path === '/api/message/downloadAttach') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (body.msgId === undefined || body.msgId === null) {
+                    res.code = 0;
+                    res.msg = '参数错误: 需要 msgId';
+                } else {
+                    res.data = downloadAttach(Number(body.msgId), body.thumb || '', body.extra || '');
+                }
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
+        else if (path === '/api/message/decryptImage') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (!body.src) {
+                    res.code = 0;
+                    res.msg = '参数错误: 需要 src';
+                } else {
+                    const out = decryptImage(body.src, body.dir || '');
+                    if (!out) {
+                        res.code = 0;
+                        res.msg = '解密失败';
+                    }
+                    res.data = out;
+                }
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
+        else if (path === '/api/message/audio') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (body.msgId === undefined || !body.dir) {
+                    res.code = 0;
+                    res.msg = '参数错误: 需要 msgId 和 dir';
+                } else {
+                    const out = getAudio(Number(body.msgId), body.dir);
+                    if (!out) {
+                        res.code = 0;
+                        res.msg = '获取语音失败';
+                    }
+                    res.data = out;
+                }
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
+        else if (path === '/api/message/types') {
+            res.data = getMsgTypes();
+        }
+        else if (path === '/api/message/listen') {
+            if (req.method === 'POST') {
+                let body: any = { enabled: true };
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (body.enabled === false) {
+                    res.data = { enabled: disableRecvMsg() ? false : isRecvMsgEnabled() };
+                } else {
+                    res.data = { enabled: enableRecvMsg(onRecvChatMessage) };
+                }
+            } else {
+                res.data = { enabled: isRecvMsgEnabled() };
+            }
+        }
+        else if (path === '/api/sns/listen') {
+            if (req.method === 'POST') {
+                let body: any = { enabled: true };
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (body.enabled === false) {
+                    res.data = { enabled: unListenPyq() ? false : isRecvPyqEnabled() };
+                } else {
+                    res.data = { enabled: listenPyq(onRecvPyqMessage) };
+                }
+            } else {
+                res.data = { enabled: isRecvPyqEnabled() };
+            }
+        }
+        else if (path === '/api/sns/refresh') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (!isRecvPyqEnabled()) {
+                    res.code = 0;
+                    res.msg = '请先开启朋友圈接收: POST /api/sns/listen {"enabled":true}';
+                } else {
+                    const id = body.id !== undefined ? Number(body.id) : 0;
+                    res.data = refreshPyq(id);
+                }
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
+        else if (path === '/api/room/add') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (body.roomId && body.wxids) {
+                    res.data = roomAdd(body.roomId, body.wxids);
+                } else {
+                    res.code = 0;
+                    res.msg = '参数错误: 需要 roomId 和 wxids（逗号分隔）';
+                }
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
+        else if (path === '/api/room/del') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (body.roomId && body.wxids) {
+                    res.data = roomDel(body.roomId, body.wxids);
+                } else {
+                    res.code = 0;
+                    res.msg = '参数错误: 需要 roomId 和 wxids（逗号分隔）';
+                }
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
+        else if (path === '/api/room/invite') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (body.roomId && body.wxids) {
+                    res.data = roomInvite(body.roomId, body.wxids);
+                } else {
+                    res.code = 0;
+                    res.msg = '参数错误: 需要 roomId 和 wxids（逗号分隔）';
+                }
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
+        else if (path === '/api/room/topic') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) body = JSON.parse(req.body);
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (body.roomId && body.topic !== undefined) {
+                    res.data = roomTopic(body.roomId, body.topic);
+                } else {
+                    res.code = 0;
+                    res.msg = '参数错误: 需要 roomId 和 topic';
+                }
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
+        else if (path === '/api/message/downloadFinderVideo') {
+            if (req.method === 'POST') {
+                let body: any = {};
+                try {
+                    if (req.body) {
+                        body = JSON.parse(req.body);
+                    }
+                } catch (e: any) {
+                    console.error('[HTTP] JSON 解析失败:', e);
+                    res.code = 0;
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`;
+                    return res;
+                }
+                if (!body.url) {
+                    res.code = 0;
+                    res.msg = '参数错误: 需要 url';
+                    return res;
+                }
+                const savePath = body.savePath || buildFinderVideoSavePath(body.msgId || String(Date.now()));
+                downloadFinderFeedVideo(body.msgId || 'manual', body.url, savePath)
+                    .then(path => console.log('[API] 视频号视频下载完成:', path))
+                    .catch(err => console.error('[API] 视频号视频下载失败:', err.message || err));
+                res.data = { savePath, status: 'downloading' };
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
         else if (path === '/api/db/names') {
             res.data = getDbNames();
         } 
@@ -1026,7 +1174,25 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                     'GET /api/contact?contactId=xxx',
                     'GET /api/rooms',
                     'GET /api/room?roomId=xxx',
+                    'POST /api/room/add',
+                    'POST /api/room/del',
+                    'POST /api/room/invite',
+                    'POST /api/room/topic',
                     'POST /api/message/text',
+                    'POST /api/message/image',
+                    'POST /api/message/file',
+                    'POST /api/message/emotion',
+                    'POST /api/message/richText',
+                    'POST /api/message/pat',
+                    'POST /api/message/forward',
+                    'POST /api/message/downloadAttach',
+                    'POST /api/message/decryptImage',
+                    'POST /api/message/audio',
+                    'GET /api/message/types',
+                    'GET|POST /api/message/listen',
+                    'POST /api/message/downloadFinderVideo',
+                    'GET|POST /api/sns/listen',
+                    'POST /api/sns/refresh',
                     'GET /api/db/names',
                     'GET /api/db/tables?dbName=xxx',
                     'POST /api/db/query',
