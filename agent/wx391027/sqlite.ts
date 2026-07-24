@@ -309,6 +309,156 @@ export const getLocalIdAndDbIdx = (id: number | string): { localId: number, dbId
     return null;
 }
 
+/** SQL 字符串转义（单引号加倍） */
+const sqlEscape = (s: string): string => String(s).replace(/'/g, "''")
+
+const cellToString = (v: Uint8Array | string | undefined): string => {
+    if (v === undefined || v === null) return ''
+    if (typeof v === 'string') return v
+    if (v instanceof Uint8Array) {
+        try {
+            return Array.from(v).map(b => String.fromCharCode(b)).join('')
+        } catch (e) {
+            return ''
+        }
+    }
+    return String(v)
+}
+
+export interface ChatHistoryQuery {
+    /** 会话 ID：好友 wxid 或群 ID（StrTalker） */
+    talker: string
+    /** 返回条数，默认 50，最大 200 */
+    limit?: number
+    /** 跳过条数，默认 0 */
+    offset?: number
+    /** 时间排序，默认 desc（新→旧） */
+    order?: 'asc' | 'desc'
+    /** 可选：消息 Type 过滤 */
+    type?: number
+    /** 可选：CreateTime 下界（含） */
+    fromTime?: number
+    /** 可选：CreateTime 上界（含） */
+    toTime?: number
+}
+
+export interface ChatHistoryItem {
+    localId: string
+    msgId: string
+    type: number
+    subType: number
+    isSender: number
+    createTime: number
+    createTimeText: string
+    talker: string
+    content: string
+    displayContent: string
+    dbName: string
+}
+
+/**
+ * 查询与某人/某群的聊天记录（扫描全部 MSG*.db，合并后分页）
+ */
+export const queryChatHistory = (opts: ChatHistoryQuery): {
+    talker: string
+    total: number
+    limit: number
+    offset: number
+    order: 'asc' | 'desc'
+    items: ChatHistoryItem[]
+} => {
+    const talker = String(opts.talker || '').trim()
+    if (!talker) {
+        return { talker: '', total: 0, limit: 0, offset: 0, order: 'desc', items: [] }
+    }
+
+    let limit = Number(opts.limit)
+    if (!Number.isFinite(limit) || limit <= 0) limit = 50
+    if (limit > 200) limit = 200
+
+    let offset = Number(opts.offset)
+    if (!Number.isFinite(offset) || offset < 0) offset = 0
+
+    const order: 'asc' | 'desc' = opts.order === 'asc' ? 'asc' : 'desc'
+    const talkerEsc = sqlEscape(talker)
+
+    const where: string[] = [`StrTalker='${talkerEsc}'`]
+    if (opts.type !== undefined && opts.type !== null && String(opts.type) !== '') {
+        const t = Number(opts.type)
+        if (Number.isFinite(t)) where.push(`Type=${t}`)
+    }
+    if (opts.fromTime !== undefined && Number.isFinite(Number(opts.fromTime))) {
+        where.push(`CreateTime>=${Number(opts.fromTime)}`)
+    }
+    if (opts.toTime !== undefined && Number.isFinite(Number(opts.toTime))) {
+        where.push(`CreateTime<=${Number(opts.toTime)}`)
+    }
+    const whereSql = where.join(' AND ')
+
+    if (dbMap.size === 0) {
+        getDbHandles()
+    }
+    const msgDbs = getDbNames().filter(n => /^MSG\d+\.db$/i.test(n))
+    // 兜底：有时只有 MSG0
+    const dbs = msgDbs.length > 0 ? msgDbs : getDbNames().filter(n => /^MSG/i.test(n) && !/^MediaMSG/i.test(n))
+
+    // 每库多取一些再合并，避免跨库分页漏消息
+    const fetchN = Math.min(500, offset + limit)
+    const merged: ChatHistoryItem[] = []
+
+    for (const dbName of dbs) {
+        const sql =
+            `SELECT localId, MsgSvrID, Type, SubType, IsSender, CreateTime, ` +
+            `StrTalker, StrContent, DisplayContent ` +
+            `FROM MSG WHERE ${whereSql} ` +
+            `ORDER BY CreateTime DESC LIMIT ${fetchN};`
+        let rows: Array<{ [key: string]: Uint8Array | string }> = []
+        try {
+            rows = execDbQuery(dbName, sql)
+        } catch (e) {
+            console.error('queryChatHistory db error:', dbName, e)
+            continue
+        }
+        for (const row of rows) {
+            const createTime = parseInt(cellToString(row.CreateTime), 10) || 0
+            const type = parseInt(cellToString(row.Type), 10) || 0
+            const subType = parseInt(cellToString(row.SubType), 10) || 0
+            const isSender = parseInt(cellToString(row.IsSender), 10) || 0
+            const content = cellToString(row.StrContent)
+            const displayContent = cellToString(row.DisplayContent)
+            const d = new Date(createTime * 1000)
+            const pad = (n: number) => (n < 10 ? '0' + n : String(n))
+            const createTimeText = Number.isFinite(d.getTime())
+                ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+                  `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+                : ''
+            merged.push({
+                localId: cellToString(row.localId),
+                msgId: cellToString(row.MsgSvrID),
+                type,
+                subType,
+                isSender,
+                createTime,
+                createTimeText,
+                talker: cellToString(row.StrTalker) || talker,
+                content,
+                displayContent,
+                dbName,
+            })
+        }
+    }
+
+    merged.sort((a, b) =>
+        order === 'asc' ? a.createTime - b.createTime : b.createTime - a.createTime
+    )
+
+    // total：粗略为合并后条数（各库各取 fetchN，可能小于真实总量）
+    const total = merged.length
+    const items = merged.slice(offset, offset + limit)
+
+    return { talker, total, limit, offset, order, items }
+}
+
 // console.log('getLocalIdAndDbIdx() res:\n', JSON.stringify(getLocalIdAndDbIdx(1234567890)))
 
 // 获取音频数据

@@ -110,7 +110,7 @@ export function getRoomMemberUserNames(roomId: string): string[] {
         return []
     }
     // 微信库常见：id1^Gid2^Gid3（字面 ^G）或 id1\x07id2（ASCII BEL）
-    // 切勿只按 ^ 分割，否则后续成员会残留前缀 G（如 Gtyutluyc）
+    // 切勿只按 ^ 分割，否则后续成员会残留前缀 G（如 Gwxxxx）
     return list
         .split(/\^G|\x07/)
         .map(s => s.replace(/^[G\^;,\s]+|[;,\s]+$/g, '').trim())

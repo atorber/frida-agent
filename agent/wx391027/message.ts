@@ -188,36 +188,100 @@ export const messageSendImage = (contactId: string, path: string): number => {
     }
 }
 
-// 发送文件消息
+// 发送文件消息（对齐 WCF SendFileMessage）
+// NativeFunction 多参在 Win x64 易触发 Frida “system error”，经 CModule 落栈
 export const messageSendFile = (contactId: string, path: string): number => {
-    const new_chat_msg_addr = moduleBaseAddress.add(offsets.kNewChatMsg);
-    const free_chat_msg_addr = moduleBaseAddress.add(offsets.kFreeChatMsg);
-    const get_app_msg_mgr_addr = moduleBaseAddress.add(offsets.kAppMsgMgr);
-    const send_file_msg_addr = moduleBaseAddress.add(offsets.kSendFileMsg);
+    try {
+        if (!contactId || !path) {
+            console.error('messageSendFile: 参数为空')
+            return -1
+        }
+        if (!hasPath(path) && !pathExistsNative(path)) {
+            console.error('messageSendFile: 文件不存在', path)
+            return -1
+        }
 
-    const msg = Memory.alloc(0x460);
-    msg.writeByteArray(Array(0x460).fill(0));
+        const constructor = new NativeFunction(
+            moduleBaseAddress.add(offsets.kNewChatMsg),
+            'pointer',
+            ['pointer']
+        )
+        const destructor = new NativeFunction(
+            moduleBaseAddress.add(offsets.kFreeChatMsg),
+            'void',
+            ['pointer']
+        )
+        const getAppMsgMgr = new NativeFunction(
+            moduleBaseAddress.add(offsets.kAppMsgMgr),
+            'pointer',
+            []
+        )
 
-    const to_user = writeWStringPtr(contactId);
-    const path_msg = writeWStringPtr(path);
+        const msg = Memory.alloc(0x460)
+        msg.writeByteArray(Array(0x460).fill(0))
+        const pMsg = constructor(msg)
+        const appMgr = getAppMsgMgr()
+        if (!appMgr || appMgr.isNull() || !pMsg || pMsg.isNull()) {
+            console.error('messageSendFile: AppMsgMgr/ChatMsg 初始化失败')
+            return -1
+        }
 
-    const tmp1 = Memory.alloc(Process.pointerSize * 4);
-    const tmp2 = Memory.alloc(Process.pointerSize * 4);
-    const tmp3 = Memory.alloc(Process.pointerSize * 4);
+        // 对齐 WCF：WxString.size 为宽字符个数
+        const to_user = createWxStringChars(contactId)
+        const path_msg = createWxStringChars(path)
+        const tmpBytes = Process.pointerSize * 4
+        const tmp1 = Memory.alloc(tmpBytes)
+        const tmp2 = Memory.alloc(tmpBytes)
+        const tmp3 = Memory.alloc(tmpBytes)
+        tmp1.writeByteArray(Array(tmpBytes).fill(0))
+        tmp2.writeByteArray(Array(tmpBytes).fill(0))
+        tmp3.writeByteArray(Array(tmpBytes).fill(0))
 
-    const constructor = new NativeFunction(new_chat_msg_addr, 'pointer', ['pointer']);
-    const destructor = new NativeFunction(free_chat_msg_addr, 'void', ['pointer']);
-    const getAppMsgMgr = new NativeFunction(get_app_msg_mgr_addr, 'pointer', []);
-    const send = new NativeFunction(send_file_msg_addr, 'int64', ['pointer', 'pointer', 'pointer', 'pointer', 'int32', 'pointer', 'int32', 'pointer', 'int32', 'pointer', 'int32', 'int32']);
+        const cm = new CModule(`
+            #include <stdint.h>
+            typedef uint64_t (*fn12_t)(
+                uint64_t, uint64_t, uint64_t, uint64_t,
+                uint64_t, uint64_t, uint64_t, uint64_t,
+                uint64_t, uint64_t, uint64_t, uint64_t);
+            typedef struct {
+                uint64_t fn;
+                uint64_t a[12];
+            } call12_t;
+            uint64_t invoke12(call12_t *p) {
+                return ((fn12_t)p->fn)(
+                    p->a[0], p->a[1], p->a[2], p->a[3],
+                    p->a[4], p->a[5], p->a[6], p->a[7],
+                    p->a[8], p->a[9], p->a[10], p->a[11]);
+            }
+        `)
+        const invoke12 = new NativeFunction(cm.invoke12, 'uint64', ['pointer'])
+        const args = Memory.alloc(8 * 13)
+        const sendAddr = moduleBaseAddress.add(offsets.kSendFileMsg)
+        // WCF: SendFile(appMgr, pMsg, &wxid, &path, 1, tmp1, 0, tmp2, 0, tmp3, 0, 0)
+        args.writePointer(sendAddr)
+        args.add(8).writePointer(appMgr)
+        args.add(16).writePointer(pMsg)
+        args.add(24).writePointer(to_user)
+        args.add(32).writePointer(path_msg)
+        args.add(40).writeU64(1)
+        args.add(48).writePointer(tmp1)
+        args.add(56).writeU64(0)
+        args.add(64).writePointer(tmp2)
+        args.add(72).writeU64(0)
+        args.add(80).writePointer(tmp3)
+        args.add(88).writeU64(0)
+        args.add(96).writeU64(0)
 
-    const pMsg = constructor(msg);
-    const appMgr = getAppMsgMgr();
-
-    const success = send(appMgr, pMsg, to_user, path_msg, 1, tmp1, 0, tmp2, 0, tmp3, 0, 0);
-
-    destructor(pMsg);
-
-    return Number(success) > 0 ? 1 : 0;
+        console.log(`messageSendFile: to=${contactId} path=${path}`)
+        const success = invoke12(args)
+        destructor(pMsg)
+        const ok = Number(success) !== 0 ? 1 : 0
+        console.log(`messageSendFile: ret=${success} ok=${ok}`)
+        return ok
+    } catch (e) {
+        console.error('messageSendFile failed:', e)
+        return -1
+    }
 }
 
 // 发送拍一拍消息

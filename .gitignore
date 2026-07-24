@@ -35,3 +35,6 @@ weebot/build/
 */node_modules
 client/node_modules
 agent/node_modules
+__pycache__/
+*.pyc
+

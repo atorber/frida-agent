@@ -89,7 +89,8 @@ import {
     getDbNames,
     getDbTables,
     execDbQuery,
-    getLocalIdAndDbIdx
+    getLocalIdAndDbIdx,
+    queryChatHistory,
 } from './sqlite.js'
 
 import {
@@ -368,7 +369,8 @@ export {
     getDbNames,
     getDbTables,
     execDbQuery,
-    getLocalIdAndDbIdx
+    getLocalIdAndDbIdx,
+    queryChatHistory,
 }
 
 rpc.exports = {
@@ -408,6 +410,7 @@ rpc.exports = {
     getDbTables: getDbTables,
     execDbQuery: execDbQuery,
     getLocalIdAndDbIdx: getLocalIdAndDbIdx,
+    queryChatHistory: queryChatHistory,
     stopHttpServer: () => {
         if (httpServerHandle) {
             httpServerHandle.close()
@@ -658,7 +661,18 @@ function handleRequest(req: ParsedRequest): HttpResponse {
             const roomId = req.query.roomId;
             const contactId = req.query.contactId || req.query.wxid;
             if (roomId && contactId) {
-                res.data = roomMemberRawPayload(roomId, contactId);
+                const member = roomMemberRawPayload(roomId, contactId);
+                if (!member.inRoom) {
+                    res.code = 0;
+                    res.data = {
+                        roomId: member.roomId,
+                        wxid: member.wxid || contactId,
+                        inRoom: false,
+                    };
+                    res.msg = `成员不在群内: ${contactId} 不在 ${member.roomId}`;
+                } else {
+                    res.data = member;
+                }
             } else {
                 res.code = 0;
                 res.msg = '参数错误: 需要 roomId 和 contactId';
@@ -767,7 +781,21 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                     return res;
                 }
                 if (body.contactId && body.path) {
-                    res.data = messageSendFile(body.contactId, body.path);
+                    try {
+                        const r = messageSendFile(body.contactId, body.path);
+                        if (r <= 0) {
+                            res.code = 0;
+                            res.data = r;
+                            res.msg = '发送文件失败（请确认路径存在且微信可访问）';
+                        } else {
+                            res.data = r;
+                        }
+                    } catch (e: any) {
+                        console.error('[HTTP] messageSendFile 异常:', e);
+                        res.code = 0;
+                        res.data = null;
+                        res.msg = `发送文件失败: ${e.message || String(e)}`;
+                    }
                 } else {
                     res.code = 0;
                     res.msg = '参数错误: 需要 contactId 和 path（文件路径）';
@@ -1144,6 +1172,65 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                 res.msg = '方法错误: 需要使用 POST';
             }
         }
+        else if (path === '/api/message/history' || path === '/api/chat/history') {
+            let talker = ''
+            let limit: number | undefined
+            let offset: number | undefined
+            let order: 'asc' | 'desc' | undefined
+            let type: number | undefined
+            let fromTime: number | undefined
+            let toTime: number | undefined
+
+            if (req.method === 'POST') {
+                let body: any = {}
+                try {
+                    if (req.body) body = JSON.parse(req.body)
+                } catch (e: any) {
+                    res.code = 0
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`
+                    return res
+                }
+                talker = body.talker || body.contactId || body.wxid || ''
+                if (body.limit !== undefined) limit = Number(body.limit)
+                if (body.offset !== undefined) offset = Number(body.offset)
+                if (body.order === 'asc' || body.order === 'desc') order = body.order
+                if (body.type !== undefined && body.type !== null && body.type !== '') {
+                    type = Number(body.type)
+                }
+                if (body.fromTime !== undefined) fromTime = Number(body.fromTime)
+                if (body.toTime !== undefined) toTime = Number(body.toTime)
+            } else {
+                talker = req.query.talker || req.query.contactId || req.query.wxid || ''
+                if (req.query.limit) limit = Number(req.query.limit)
+                if (req.query.offset) offset = Number(req.query.offset)
+                if (req.query.order === 'asc' || req.query.order === 'desc') {
+                    order = req.query.order as 'asc' | 'desc'
+                }
+                if (req.query.type) type = Number(req.query.type)
+                if (req.query.fromTime) fromTime = Number(req.query.fromTime)
+                if (req.query.toTime) toTime = Number(req.query.toTime)
+            }
+
+            if (!talker) {
+                res.code = 0
+                res.msg = '参数错误: 需要 talker（或 contactId）'
+            } else {
+                try {
+                    res.data = queryChatHistory({
+                        talker,
+                        limit,
+                        offset,
+                        order,
+                        type,
+                        fromTime,
+                        toTime,
+                    })
+                } catch (e: any) {
+                    res.code = 0
+                    res.msg = `查询失败: ${e.message || String(e)}`
+                }
+            }
+        }
         else if (path === '/api/db/names') {
             res.data = getDbNames();
         } 
@@ -1272,6 +1359,7 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                     'POST /api/message/downloadAttach',
                     'POST /api/message/decryptImage',
                     'POST /api/message/audio',
+                    'GET|POST /api/message/history',
                     'GET /api/message/types',
                     'GET|POST /api/message/listen',
                     'POST /api/message/downloadFinderVideo',

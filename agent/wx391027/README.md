@@ -12,6 +12,7 @@
 |获取可查询数据库|Y|`GET /api/db/names`|
 |获取数据库所有表|Y|`GET /api/db/tables?dbName=xxx`|
 |获取语音消息|Y|`POST /api/message/audio`（silk→mp3，需本机 pysilk+ffmpeg）|
+|查询聊天记录|Y|`GET\|POST /api/message/history`（按 talker 查 MSG*.db）|
 |发送文本消息|Y|`POST /api/message/text`|
 |发送@文本消息|Y|`POST /api/message/text`，`atWxids`|
 |发送图片消息|Y|`POST /api/message/image`|
@@ -51,11 +52,17 @@
 | Base URL | `http://127.0.0.1:19088` |
 | Content-Type | `application/json`（POST 请求体） |
 | 统一响应 | `{ "code": 1, "data": ..., "msg": "success" }`，`code=0` 表示失败 |
+| Postman | 导入同目录 [`wx391027.postman_collection.json`](./wx391027.postman_collection.json) |
 
 下方示例统一使用：
 
 ```bash
+# Mac、Linux
 BASE=http://127.0.0.1:19088
+
+# Windows
+$BASE = "http://127.0.0.1:19088"
+curl "$BASE/api/health"
 ```
 
 Windows 路径在 JSON 中需转义反斜杠，例如 `"C:\\\\Users\\\\me\\\\a.jpg"`。
@@ -197,6 +204,8 @@ curl "$BASE/api/room/members?roomId=21341182572@chatroom"
 |--|--|--|--|
 | `roomId` | Query | 是 | 群 ID |
 | `contactId` | Query | 是 | 成员 wxid / 微信号 / 昵称 |
+
+不在群内时：`code=0`，`msg` 提示「成员不在群内…」，`data.inRoom=false`。
 
 ```bash
 curl "$BASE/api/room/member?roomId=21341182572@chatroom&contactId=wxxxx"
@@ -450,7 +459,34 @@ curl -X POST "$BASE/api/message/audio" \
   -d "{\"msgId\":1234567890123456,\"dir\":\"C:\\\\temp\\\\voice\"}"
 ```
 
-#### 6.4 下载视频号视频
+#### 6.4 查询聊天记录 ok
+
+**`GET|POST /api/message/history`**（别名 `/api/chat/history`）
+
+扫描全部 `MSG*.db`，按会话合并后分页。`msgId` 以字符串返回。
+
+| 参数 | 类型 | 必填 | 说明 |
+|--|--|--|--|
+| `talker` / `contactId` | string | 是 | 好友 wxid 或群 ID（`StrTalker`） |
+| `limit` | number | 否 | 默认 50，最大 200 |
+| `offset` | number | 否 | 默认 0 |
+| `order` | string | 否 | `desc`（默认，新→旧）/ `asc` |
+| `type` | number | 否 | 消息 Type，如 `1`=文本 |
+| `fromTime` / `toTime` | number | 否 | CreateTime Unix 秒 |
+
+```bash
+# GET
+curl "$BASE/api/message/history?talker=wxxxx&limit=20"
+
+# POST
+curl -X POST "$BASE/api/message/history" \
+  -H "Content-Type: application/json" \
+  -d "{\"talker\":\"wxxxx\",\"limit\":20,\"order\":\"desc\"}"
+```
+
+`data.items[]` 字段：`msgId` / `type` / `isSender` / `createTime` / `createTimeText` / `content` / `displayContent` / `dbName` 等。
+
+#### 6.5 下载视频号视频
 
 **`POST /api/message/downloadFinderVideo`**
 
@@ -484,8 +520,8 @@ curl "$BASE/api/message/types"
 
 #### 7.2 开启 / 关闭聊天消息 Hook
 
-**`GET /api/message/listen`**：查询当前状态  
-**`POST /api/message/listen`**：开关
+**`GET /api/message/listen`**：查询当前状态 ok
+**`POST /api/message/listen`**：开关 ok
 
 | 参数 | 类型 | 必填 | 说明 |
 |--|--|--|--|
@@ -521,9 +557,7 @@ curl -X POST "$BASE/api/message/listen" \
 ```bash
 curl "$BASE/api/sns/listen"
 
-curl -X POST "$BASE/api/sns/listen" \
-  -H "Content-Type: application/json" \
-  -d "{\"enabled\":true}"
+curl -X POST "$BASE/api/sns/listen" -H "Content-Type: application/json" -d "{\"enabled\":true}"
 
 curl -X POST "$BASE/api/sns/listen" \
   -H "Content-Type: application/json" \

@@ -1,0 +1,564 @@
+{
+  "info": {
+    "_postman_id": "a7c3e8f1-3910-4027-b891-wx391027agent",
+    "name": "wx391027 Frida Agent",
+    "description": "WeChat 3.9.10.27 Frida Agent HTTP API（对齐 README）\n\n导入后确认 Collection 变量 `baseUrl` 为 `http://127.0.0.1:19088`。\n大整数 msgId 请保持字符串，避免精度丢失。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:19088" },
+    { "key": "contactId", "value": "filehelper" },
+    { "key": "roomId", "value": "21341182572@chatroom" },
+    { "key": "memberId", "value": "wxxxx" },
+    { "key": "msgId", "value": "8233065081616396038" },
+    { "key": "imagePath", "value": "C:\\\\GitHub\\\\frida-agent\\\\agent\\\\1.jpg" },
+    { "key": "filePath", "value": "C:\\\\GitHub\\\\frida-agent\\\\agent\\\\package.json" },
+    { "key": "emotionPath", "value": "C:\\\\GitHub\\\\frida-agent\\\\agent\\\\funny.gif" },
+    { "key": "audioDir", "value": "C:\\\\temp\\\\voice" },
+    { "key": "dbName", "value": "MicroMsg.db" }
+  ],
+  "item": [
+    {
+      "name": "0. 健康 / 服务",
+      "item": [
+        {
+          "name": "健康检查",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/health",
+            "description": "GET /api/health（或 /）"
+          }
+        },
+        {
+          "name": "服务状态",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/server/status"
+          }
+        },
+        {
+          "name": "停止 HTTP 监听",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": "{{baseUrl}}/api/server/stop",
+            "description": "释放 19088，不杀微信"
+          }
+        },
+        {
+          "name": "启动 HTTP 监听",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": "{{baseUrl}}/api/server/start"
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. 登录 / 账号",
+      "item": [
+        {
+          "name": "查询登录状态",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/checkLogin"
+          }
+        },
+        {
+          "name": "自己的账号信息",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/contacts/self"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. 联系人",
+      "item": [
+        {
+          "name": "联系人列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/contacts"
+          }
+        },
+        {
+          "name": "联系人详情",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/contact?contactId={{contactId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "contact"],
+              "query": [{ "key": "contactId", "value": "{{contactId}}" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. 群聊",
+      "item": [
+        {
+          "name": "群列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/rooms"
+          }
+        },
+        {
+          "name": "群详情",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/room?roomId={{roomId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "room"],
+              "query": [{ "key": "roomId", "value": "{{roomId}}" }]
+            }
+          }
+        },
+        {
+          "name": "群成员列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/room/members?roomId={{roomId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "room", "members"],
+              "query": [{ "key": "roomId", "value": "{{roomId}}" }]
+            }
+          }
+        },
+        {
+          "name": "单个群成员",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/room/member?roomId={{roomId}}&contactId={{memberId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "room", "member"],
+              "query": [
+                { "key": "roomId", "value": "{{roomId}}" },
+                { "key": "contactId", "value": "{{memberId}}" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "添加群成员",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roomId\": \"{{roomId}}\",\n  \"wxids\": \"{{memberId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/room/add"
+          }
+        },
+        {
+          "name": "邀请群成员",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roomId\": \"{{roomId}}\",\n  \"wxids\": \"{{memberId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/room/invite"
+          }
+        },
+        {
+          "name": "删除群成员",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roomId\": \"{{roomId}}\",\n  \"wxids\": \"{{memberId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/room/del"
+          }
+        },
+        {
+          "name": "修改群名",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roomId\": \"{{roomId}}\",\n  \"topic\": \"新群名\"\n}"
+            },
+            "url": "{{baseUrl}}/api/room/topic"
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. 消息发送",
+      "item": [
+        {
+          "name": "发送文本",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"contactId\": \"{{contactId}}\",\n  \"text\": \"hello from agent\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/text"
+          }
+        },
+        {
+          "name": "发送文本 @指定人",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"contactId\": \"{{roomId}}\",\n  \"text\": \"请看一下\",\n  \"atWxids\": [\"{{memberId}}\"]\n}"
+            },
+            "url": "{{baseUrl}}/api/message/text"
+          }
+        },
+        {
+          "name": "发送文本 @所有人",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"contactId\": \"{{roomId}}\",\n  \"text\": \"全体注意\",\n  \"atWxids\": [\"notify@all\"]\n}"
+            },
+            "url": "{{baseUrl}}/api/message/text"
+          }
+        },
+        {
+          "name": "发送图片",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"contactId\": \"{{contactId}}\",\n  \"path\": \"{{imagePath}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/image"
+          }
+        },
+        {
+          "name": "发送文件",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"contactId\": \"{{contactId}}\",\n  \"path\": \"{{filePath}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/file"
+          }
+        },
+        {
+          "name": "发送表情/GIF",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"contactId\": \"{{contactId}}\",\n  \"path\": \"{{emotionPath}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/emotion",
+            "description": ">500KB 会自动改走文件发送"
+          }
+        },
+        {
+          "name": "发送链接卡片",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"receiver\": \"{{contactId}}\",\n  \"title\": \"示例标题\",\n  \"url\": \"https://example.com\",\n  \"digest\": \"这是摘要\",\n  \"thumburl\": \"https://example.com/thumb.png\",\n  \"account\": \"\",\n  \"name\": \"示例号\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/richText"
+          }
+        },
+        {
+          "name": "拍一拍",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roomId\": \"{{roomId}}\",\n  \"contactId\": \"{{memberId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/pat"
+          }
+        },
+        {
+          "name": "转发消息",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"msgId\": \"{{msgId}}\",\n  \"receiver\": \"{{contactId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/forward",
+            "description": "msgId 必须用字符串"
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. 媒体 / 附件",
+      "item": [
+        {
+          "name": "下载附件",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"msgId\": \"{{msgId}}\",\n  \"thumb\": \"\",\n  \"extra\": \"C:\\\\temp\\\\out.jpg\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/downloadAttach"
+          }
+        },
+        {
+          "name": "解密图片",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"src\": \"C:\\\\Users\\\\me\\\\Documents\\\\WeChat Files\\\\xxx\\\\FileStorage\\\\MsgAttach\\\\a.dat\",\n  \"dir\": \"C:\\\\temp\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/decryptImage"
+          }
+        },
+        {
+          "name": "导出语音 (silk→mp3)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"msgId\": \"{{msgId}}\",\n  \"dir\": \"{{audioDir}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/audio"
+          }
+        },
+        {
+          "name": "查询聊天记录",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"talker\": \"{{contactId}}\",\n  \"limit\": 20,\n  \"offset\": 0,\n  \"order\": \"desc\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/history",
+            "description": "也可 GET ?talker=&limit=；msgId 为字符串"
+          }
+        },
+        {
+          "name": "下载视频号视频",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://finder.video.qq.com/xxx.mp4\",\n  \"msgId\": \"{{msgId}}\",\n  \"savePath\": \"C:\\\\temp\\\\finder.mp4\"\n}"
+            },
+            "url": "{{baseUrl}}/api/message/downloadFinderVideo"
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. 消息接收",
+      "item": [
+        {
+          "name": "消息类型表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/message/types"
+          }
+        },
+        {
+          "name": "查询消息监听状态",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/message/listen"
+          }
+        },
+        {
+          "name": "开启消息监听",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": true\n}"
+            },
+            "url": "{{baseUrl}}/api/message/listen"
+          }
+        },
+        {
+          "name": "关闭消息监听",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": false\n}"
+            },
+            "url": "{{baseUrl}}/api/message/listen"
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. 朋友圈",
+      "item": [
+        {
+          "name": "查询朋友圈监听状态",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/sns/listen"
+          }
+        },
+        {
+          "name": "开启朋友圈监听",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": true\n}"
+            },
+            "url": "{{baseUrl}}/api/sns/listen"
+          }
+        },
+        {
+          "name": "关闭朋友圈监听",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": false\n}"
+            },
+            "url": "{{baseUrl}}/api/sns/listen"
+          }
+        },
+        {
+          "name": "刷新朋友圈",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": 0\n}"
+            },
+            "url": "{{baseUrl}}/api/sns/refresh",
+            "description": "需先开启 /api/sns/listen；id=0 第一页"
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. 数据库",
+      "item": [
+        {
+          "name": "数据库名列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/db/names"
+          }
+        },
+        {
+          "name": "表列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/db/tables?dbName={{dbName}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "db", "tables"],
+              "query": [{ "key": "dbName", "value": "{{dbName}}" }]
+            }
+          }
+        },
+        {
+          "name": "执行查询",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dbName\": \"{{dbName}}\",\n  \"sql\": \"SELECT UserName,NickName FROM Contact WHERE NickName!='' LIMIT 5;\"\n}"
+            },
+            "url": "{{baseUrl}}/api/db/query"
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. 消息推送",
+      "item": [
+        {
+          "name": "查询推送配置",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/push/config"
+          }
+        },
+        {
+          "name": "开启推送",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": true,\n  \"callbackUrl\": \"http://127.0.0.1:3000/wx-callback\"\n}"
+            },
+            "url": "{{baseUrl}}/api/push/config"
+          }
+        },
+        {
+          "name": "关闭推送",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": false\n}"
+            },
+            "url": "{{baseUrl}}/api/push/config"
+          }
+        }
+      ]
+    }
+  ]
+}
