@@ -5,6 +5,8 @@ import {
     ReadWeChatStr,
     WeChatMessage,
     hasPath,
+    pathExistsNative,
+    getFileSizeNative,
     uint8ArrayToString,
     stringToUint8Array,
     readAll,
@@ -18,11 +20,15 @@ import {
     initmsgStruct,
     parseContact,
     createWxString,
+    createWxStringChars,
+    createWxStringHeap,
     createWxStringVector,
+    heapAlloc,
     WX_STRING_SIZE,
     readFileBytes,
     writeFileBytes,
     ensureParentDirNative,
+    convertSilkToMp3,
 } from './utils.js'
 
 import {
@@ -38,178 +44,81 @@ const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 /*
 发送文本消息 3.9.10.27
 */ 
+// 缓存 NativeFunction，避免每次发送都新建（减轻 GumJS / Socket 侧压力）
+let _sendTextFns: {
+    mgr: any
+    send: any
+    free: any
+} | null = null
+
+function getSendTextFns() {
+    if (_sendTextFns) return _sendTextFns
+    _sendTextFns = {
+        mgr: new NativeFunction(moduleBaseAddress.add(offsets.kSendMessageMgr), 'void', []),
+        send: new NativeFunction(
+            moduleBaseAddress.add(offsets.kSendTextMsg),
+            'uint64',
+            ['pointer', 'pointer', 'pointer', 'pointer', 'int32', 'int32', 'int32', 'int32']
+        ),
+        free: new NativeFunction(moduleBaseAddress.add(offsets.kFreeChatMsg), 'void', ['pointer']),
+    }
+    return _sendTextFns
+}
+
 export const messageSendText = (contactId: string, text: string, atWxids?: string[]): number => {
     const startTime = Date.now();
-    console.log(`[MSG] [${new Date().toISOString()}] messageSendText 开始执行:`, { 
-        contactId, 
-        textLength: text.length,
-        textPreview: text.length > 50 ? text.substring(0, 50) + '...' : text,
-        atWxids 
-    });
-    
     try {
-        const step1Time = Date.now();
-        const send_message_mgr_addr = moduleBaseAddress.add(offsets.kSendMessageMgr);
-        const send_text_msg_addr = moduleBaseAddress.add(offsets.kSendTextMsg);
-        const free_chat_msg_addr = moduleBaseAddress.add(offsets.kFreeChatMsg);
-
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤1: 获取函数地址完成，耗时: ${Date.now() - step1Time}ms`, {
-            send_message_mgr_addr,
-            send_text_msg_addr,
-            free_chat_msg_addr
-        });
-
-        const step2Time = Date.now();
-        // 分配内存并初始化
-        const chat_msg = Memory.alloc(0x460);
-        chat_msg.writeByteArray(Array(0x460).fill(0));
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤2: 分配消息缓冲区完成，耗时: ${Date.now() - step2Time}ms，地址:`, chat_msg);
-
-        // 检查是否需要@人，如果需要且在群聊中，需要在文本前添加@用户
+        // 对齐 WCF：WxString.size/capacity 为 wchar 个数；结构体 0x20
         let msgText = text;
         if (contactId.includes('@chatroom') && atWxids && atWxids.length > 0) {
-            console.log('处理@消息，群聊ID:', contactId);
             for (const wxid of atWxids) {
                 if (wxid === 'notify@all') {
-                    // 特殊处理@所有人
                     if (!msgText.includes('@所有人')) {
                         msgText = '@所有人 ' + msgText;
                     }
                 } else {
-                    // 普通@用户，只有当文本中还没有@该用户时才添加
                     const atText = `@${wxid}`;
                     if (!msgText.includes(atText)) {
                         msgText = `${atText} ${msgText}`;
                     }
                 }
             }
-            console.log('添加@后的消息:', msgText);
         }
 
-        const step3Time = Date.now();
-        // 构造字符串参数
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤3: 开始构造字符串参数...`);
-        const to_user = writeWStringPtr(contactId);
-        console.log(`[MSG] [${new Date().toISOString()}] to_user 指针创建完成:`, to_user);
-        const text_msg = writeWStringPtr(msgText);
-        console.log(`[MSG] [${new Date().toISOString()}] text_msg 指针创建完成:`, text_msg);
+        const chat_msg = Memory.alloc(0x460);
+        chat_msg.writeByteArray(Array(0x460).fill(0));
+        const to_user = createWxStringChars(contactId);
+        const text_msg = createWxStringChars(msgText);
 
-        if (!to_user || !text_msg) {
-            throw new Error('Failed to create string pointers');
-        }
-
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤3: 字符串参数构造完成，耗时: ${Date.now() - step3Time}ms`, {
-            to_user,
-            text_msg
-        });
-
-        // 处理@消息
+        // RawVector<WxString>：与 WCF vector 布局一致（start/finish/end）
+        // 无 @ 时仍 push 一个空 WxString（对齐 WCF）
         let wxAters: NativePointer;
+        const pinned: NativePointer[] = [chat_msg, to_user, text_msg];
         if (atWxids && atWxids.length > 0) {
-            console.log('处理@列表:', atWxids);
-            // 创建WxString数组
-            const wxStrings: NativePointer[] = [];
-            for (const wxid of atWxids) {
-                const wxStringPtr = writeWStringPtr(wxid);
-                if (wxStringPtr && !wxStringPtr.isNull()) {
-                    wxStrings.push(wxStringPtr);
-                    console.log('添加@用户:', wxid, '指针:', wxStringPtr);
-                }
-            }
-
-            // 分配RawVector结构的内存
-            const rawVectorSize = Process.pointerSize * 3; // start, finish, end
-            const rawVector = Memory.alloc(rawVectorSize);
-            rawVector.writeByteArray(Array(rawVectorSize).fill(0));
-
-            // 设置RawVector的指针
-            const start = Memory.alloc(Process.pointerSize * wxStrings.length);
-            start.writeByteArray(Array(Process.pointerSize * wxStrings.length).fill(0));
-
-            // 写入WxString指针
-            for (let i = 0; i < wxStrings.length; i++) {
-                start.add(Process.pointerSize * i).writePointer(wxStrings[i]);
-                console.log('写入@用户指针:', i, wxStrings[i]);
-            }
-
-            // 设置RawVector的字段
-            rawVector.writePointer(start); // start
-            rawVector.add(Process.pointerSize).writePointer(start.add(Process.pointerSize * wxStrings.length)); // finish
-            rawVector.add(Process.pointerSize * 2).writePointer(start.add(Process.pointerSize * wxStrings.length)); // end
-
-            wxAters = rawVector;
-            console.log('RawVector结构:', {
-                start: rawVector.readPointer(),
-                finish: rawVector.add(Process.pointerSize).readPointer(),
-                end: rawVector.add(Process.pointerSize * 2).readPointer()
-            });
+            wxAters = createWxStringVector(atWxids, false);
         } else {
-            // 创建空的WxString
-            const emptyWxString = writeWStringPtr('');
-            const rawVectorSize = Process.pointerSize * 4;
-            const rawVector = Memory.alloc(rawVectorSize);
-            rawVector.writeByteArray(Array(rawVectorSize).fill(0));
-
-            const start = Memory.alloc(Process.pointerSize);
-            start.writePointer(emptyWxString);
-
-            rawVector.writePointer(start);
-            rawVector.add(Process.pointerSize).writePointer(start.add(Process.pointerSize));
-            rawVector.add(Process.pointerSize * 2).writePointer(start.add(Process.pointerSize));
-            rawVector.add(Process.pointerSize * 3).writePointer(start.add(Process.pointerSize));
-
-            wxAters = rawVector;
-            console.log('创建空的RawVector结构');
+            const emptyWx = createWxStringChars('');
+            const finish = emptyWx.add(WX_STRING_SIZE);
+            wxAters = Memory.alloc(Process.pointerSize * 3);
+            wxAters.writePointer(emptyWx);
+            wxAters.add(Process.pointerSize).writePointer(finish);
+            wxAters.add(Process.pointerSize * 2).writePointer(finish);
+            pinned.push(emptyWx);
         }
+        pinned.push(wxAters);
 
-        if (!wxAters || wxAters.isNull()) {
-            throw new Error('Failed to create wxAters');
-        }
-
-        const step4Time = Date.now();
-        // 创建NativeFunction对象
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤4: 创建 NativeFunction 对象...`);
-        const mgr = new NativeFunction(send_message_mgr_addr, 'void', []);
-        const send = new NativeFunction(send_text_msg_addr, 'uint64', ['pointer', 'pointer', 'pointer', 'pointer', 'int32', 'int32', 'int32', 'int32']);
-        const free = new NativeFunction(free_chat_msg_addr, 'void', ['pointer']);
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤4: NativeFunction 对象创建完成，耗时: ${Date.now() - step4Time}ms`);
-
-        const step5Time = Date.now();
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤5: 调用发送消息管理器初始化...`);
+        const { mgr, send, free } = getSendTextFns();
         mgr();
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤5: 发送消息管理器初始化完成，耗时: ${Date.now() - step5Time}ms`);
-
-        const step6Time = Date.now();
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤6: 准备发送文本消息，参数:`, {
-            chat_msg,
-            to_user,
-            text_msg,
-            wxAters,
-            wxAters_start: wxAters.readPointer()
-        });
-
-        // 发送文本消息
-        // 注意：wxAters 是 RawVector 结构的指针，应该直接传递，而不是 readPointer()
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤6: 开始调用 send 函数...`);
         const success = send(chat_msg, to_user, text_msg, wxAters, 1, 1, 0, 0);
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤6: send 函数调用完成，耗时: ${Date.now() - step6Time}ms，返回值:`, success);
-
-        const step7Time = Date.now();
-        // 释放内存
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤7: 释放内存...`);
         free(chat_msg);
-        console.log(`[MSG] [${new Date().toISOString()}] 步骤7: 内存释放完成，耗时: ${Date.now() - step7Time}ms`);
+        // 保持引用，避免发送返回前被 GC
+        void pinned.length;
 
-        const totalTime = Date.now() - startTime;
         const result = Number(success) > 0 ? 1 : 0;
-        console.log(`[MSG] [${new Date().toISOString()}] messageSendText 执行完成，总耗时: ${totalTime}ms，结果:`, result);
-        
+        console.log(`[MSG] messageSendText ok, ${Date.now() - startTime}ms, result=${result}`);
         return result;
     } catch (error: any) {
-        const totalTime = Date.now() - startTime;
-        console.error(`[MSG] [${new Date().toISOString()}] messageSendText 执行异常，总耗时: ${totalTime}ms`);
-        console.error(`[MSG] [${new Date().toISOString()}] 错误信息:`, error);
-        console.error(`[MSG] [${new Date().toISOString()}] 错误堆栈:`, error.stack);
+        console.error(`[MSG] messageSendText 异常:`, error);
         return -1;
     }
 }
@@ -358,27 +267,43 @@ export const messageSendPat = (roomId: string, contactId: string): number => {
     }
 }
 
-// 转发消息
-export const messageForward = (msgId: number, receiver: string): number => {
-    const forward_msg_addr = moduleBaseAddress.add(offsets.kForwardMsg);
+// 转发消息（对齐 WCF ForwardMessage；msgId 建议传字符串避免 JS 精度丢失）
+export const messageForward = (msgId: number | string, receiver: string): number => {
+    try {
+        if (!receiver) {
+            console.error('messageForward: receiver 为空')
+            return -1
+        }
 
-    const result = getLocalIdAndDbIdx(msgId);
-    if (!result) {
-        return -1;
+        const result = getLocalIdAndDbIdx(msgId);
+        if (!result) {
+            console.error('messageForward: 未找到 localId/dbIdx, msgId=', msgId)
+            return -1;
+        }
+
+        const { localId, dbIdx } = result;
+        // WCF: NewWxStringFromStr + LARGE_INTEGER{ HighPart=dbIdx, LowPart=localId }
+        const receiverStr = createWxStringChars(receiver);
+
+        const l = Memory.alloc(0x8);
+        l.writeU32(localId >>> 0);       // LowPart
+        l.add(0x4).writeU32(dbIdx >>> 0); // HighPart
+        const quad = l.readU64()
+
+        const forward = new NativeFunction(
+            moduleBaseAddress.add(offsets.kForwardMsg),
+            'int',
+            ['pointer', 'uint64', 'int', 'int']
+        );
+
+        const raw = forward(receiverStr, quad, 0x4, 0x0) as number
+        const status = raw & 0xff
+        console.log(`messageForward msgId=${msgId} localId=${localId} dbIdx=${dbIdx} raw=${raw} status=${status}`)
+        return status;
+    } catch (e) {
+        console.error('messageForward failed:', e)
+        return -1
     }
-
-    const { localId, dbIdx } = result;
-    const receiverStr = writeWStringPtr(receiver);
-
-    const l = Memory.alloc(0x8);
-    l.writeU32(dbIdx);
-    l.add(0x4).writeU32(localId);
-
-    const forward = new NativeFunction(forward_msg_addr, 'int32', ['pointer', 'int64', 'int32', 'int32']);
-
-    const success = forward(receiverStr, l.readInt(), 0x4, 0x0);
-
-    return success;
 }
 
 /** 发送链接卡片消息（对齐 WCF SendRichTextMessage） */
@@ -428,7 +353,142 @@ export const messageSendRichText = (rt: RichTextMsg): number => {
     }
 }
 
-/** 发送表情/GIF（对齐 WCF SendEmotionMessage） */
+let emotionHookInstalled = false
+let emotionCallFromUs = false
+
+function readWxStringArg(p: NativePointer): { size: number; str: string } {
+    try {
+        if (!p || p.isNull()) {
+            return { size: 0, str: '' }
+        }
+        const wptr = p.readPointer()
+        const size = p.add(8).readU32()
+        let str = ''
+        if (wptr && !wptr.isNull()) {
+            str = (size > 0 && size < 0x1000 ? wptr.readUtf16String(size) : wptr.readUtf16String()) || ''
+        }
+        return { size, str }
+    } catch (e) {
+        return { size: -1, str: '' }
+    }
+}
+
+function dumpPtrHex(tag: string, label: string, p: NativePointer, n = 0x40): void {
+    try {
+        if (!p || p.isNull()) {
+            console.log(`${tag} ${label}=null`)
+            return
+        }
+        const buf = p.readByteArray(n)
+        if (!buf) {
+            console.log(`${tag} ${label} read failed`)
+            return
+        }
+        const arr = Array.from(new Uint8Array(buf))
+        console.log(`${tag} ${label}@${p} ${arr.map(b => b.toString(16).padStart(2, '0')).join(' ')}`)
+    } catch (e) {
+        console.log(`${tag} ${label} dump err:`, e)
+    }
+}
+
+function describeWxLike(tag: string, label: string, p: NativePointer): void {
+    try {
+        if (!p || p.isNull()) {
+            return
+        }
+        const wptr = p.readPointer()
+        const size = p.add(8).readU32()
+        const cap = p.add(12).readU32()
+        let str = ''
+        if (wptr && !wptr.isNull()) {
+            try {
+                str = wptr.readUtf16String() || ''
+            } catch (e) {}
+        }
+        console.log(`${tag} ${label} wptr=${wptr} size=${size} cap=${cap} str="${str}"`)
+        dumpPtrHex(tag, label + 'raw', p, 0x20)
+    } catch (e) {
+        console.log(`${tag} ${label} describe err:`, e)
+    }
+}
+
+function toModuleRva(addr: NativePointer): string {
+    try {
+        const base = moduleBaseAddress
+        const off = addr.sub(base)
+        if (off.compare(0) >= 0 && off.compare(0x10000000) < 0) {
+            return `WeChatWin.dll+0x${off.toString(16)}`
+        }
+    } catch (e) {}
+    return `${addr}`
+}
+
+/** 拦截 SendEmotion / EmotionMgr：对照 UI 与 API 入参差异 */
+export function installEmotionHook(): void {
+    if (emotionHookInstalled) {
+        return
+    }
+    emotionHookInstalled = true
+
+    let mgrUiLogLeft = 2
+    Interceptor.attach(moduleBaseAddress.add(offsets.OS_GET_EMOTION_MGR), {
+        onLeave(retval) {
+            if (emotionCallFromUs) {
+                console.log(`EmotionMgr[api] ret=${retval}`)
+                return
+            }
+            if (mgrUiLogLeft <= 0) {
+                return
+            }
+            mgrUiLogLeft -= 1
+            console.log(`EmotionMgr[ui] ret=${retval} (剩余采样 ${mgrUiLogLeft})`)
+        },
+    })
+
+    Interceptor.attach(moduleBaseAddress.add(offsets.OS_SEND_EMOTION), {
+        onEnter(args) {
+            const tag = emotionCallFromUs ? 'Emotion[api]' : 'Emotion[ui]'
+            this.tag = tag
+            console.log(
+                `${tag} mgr=${args[0]} path=${args[1]} a3=${args[2]} wxid=${args[3]}` +
+                ` a5=${args[4]} a6=${args[5]} a7=${args[6]} a8=${args[7]}`
+            )
+            describeWxLike(tag, 'path', args[1])
+            describeWxLike(tag, 'wxid', args[3])
+            dumpPtrHex(tag, 'a3', args[2], 0x40)
+            dumpPtrHex(tag, 'a6', args[5], 0x40)
+            // UI 的 a8 与 a3/a6 不同，可能是表情对象
+            dumpPtrHex(tag, 'a8', args[7], 0x60)
+            try {
+                describeWxLike(tag, 'a8asWx', args[7])
+            } catch (e) {}
+            try {
+                const bt = Thread.backtrace(this.context, Backtracer.FUZZY)
+                    .slice(0, 8)
+                    .map(a => toModuleRva(a))
+                    .join('\n  ')
+                console.log(`${tag} backtrace:\n  ${bt}`)
+            } catch (e) {}
+        },
+        onLeave(retval) {
+            const tag = (this as any).tag || (emotionCallFromUs ? 'Emotion[api]' : 'Emotion[ui]')
+            console.log(`${tag} retval=${retval} low8=${retval.toInt32() & 0xff}`)
+        },
+    })
+
+    console.log(
+        '已安装 Emotion 钩子：请分别用 UI 自定义 GIF 与 API 各发一次，对比 path/a3/a6/a8'
+    )
+}
+
+/** 微信自定义表情常见上限；超过时 UI 会改为文件发送 */
+const EMOTION_MAX_BYTES = 500 * 1024
+
+/**
+ * 发送表情/GIF（对齐 WCF SendEmotionMessage）。
+ * 文件过大时对齐 UI：自动改走文件发送。
+ * @returns 1=表情成功，2=过大已改文件发送，-1=失败
+ */
 export const messageSendEmotion = (contactId: string, path: string): number => {
     try {
         if (!contactId || !path) {
@@ -436,26 +496,81 @@ export const messageSendEmotion = (contactId: string, path: string): number => {
             return -1
         }
 
+        if (!hasPath(path)) {
+            console.error('messageSendEmotion: 文件不存在', path)
+            return -1
+        }
+
+        const fileSize = getFileSizeNative(path)
+        if (fileSize > EMOTION_MAX_BYTES) {
+            console.log(
+                `messageSendEmotion: size=${fileSize} > ${EMOTION_MAX_BYTES}，对齐 UI 改为文件发送`
+            )
+            const fileRet = messageSendFile(contactId, path)
+            return fileRet > 0 ? 2 : -1
+        }
+
+        installEmotionHook()
+
         const getEmotionMgr = new NativeFunction(
             moduleBaseAddress.add(offsets.OS_GET_EMOTION_MGR),
             'pointer',
             []
         )
-        const sendEmotion = new NativeFunction(
-            moduleBaseAddress.add(offsets.OS_SEND_EMOTION),
-            'int64',
-            ['pointer', 'pointer', 'pointer', 'pointer', 'int32', 'pointer', 'int32', 'pointer']
-        )
 
-        const pWxPath = createWxString(path)
-        const pWxWxid = createWxString(contactId)
-        const buff = Memory.alloc(0x20)
-        buff.writeByteArray(Array(0x20).fill(0))
+        // NativeFunction 传 >4 个参数时，Windows x64 栈参可能未正确落栈；
+        // SendEmotion 会读第 6 参并解引用，若为 0 即崩（system error）。
+        // 用单指针结构体绕过 Frida 多参传栈问题，由 C 编译器生成正确调用。
+        const cm = new CModule(`
+            #include <stdint.h>
+            typedef uint64_t (*fn8_t)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                      uint64_t, uint64_t, uint64_t, uint64_t);
+            typedef struct {
+                uint64_t fn, a1, a2, a3, a4, a5, a6, a7, a8;
+            } call8_t;
+            uint64_t invoke8(call8_t *p) {
+                return ((fn8_t)p->fn)(p->a1, p->a2, p->a3, p->a4, p->a5, p->a6, p->a7, p->a8);
+            }
+        `)
+        const invoke8 = new NativeFunction(cm.invoke8, 'uint64', ['pointer'])
+
+        const pWxPath = createWxStringHeap(path)
+        const pWxWxid = createWxStringHeap(contactId)
+        const buff = heapAlloc(0x40)
 
         const mgr = getEmotionMgr()
-        const status = sendEmotion(mgr, pWxPath, buff, pWxWxid, 2, buff, 0, buff)
-        return Number(status) >= 0 ? 1 : -1
+        if (!mgr || mgr.isNull()) {
+            console.error('messageSendEmotion: EmotionMgr 为空')
+            return -1
+        }
+
+        const sendAddr = moduleBaseAddress.add(offsets.OS_SEND_EMOTION)
+        const args = Memory.alloc(8 * 9)
+        args.writePointer(sendAddr)
+        args.add(8).writePointer(mgr)
+        args.add(16).writePointer(pWxPath)
+        args.add(24).writePointer(buff)
+        args.add(32).writePointer(pWxWxid)
+        args.add(40).writeU64(2)
+        args.add(48).writePointer(buff)
+        args.add(56).writeU64(0)
+        args.add(64).writePointer(buff)
+
+        console.log(
+            `messageSendEmotion: contactId=${contactId} path=${path} size=${fileSize}` +
+            ` mgr=${mgr} pathW=${pWxPath.readPointer().readUtf16String()}`
+        )
+        emotionCallFromUs = true
+        let ret: NativePointer | number | UInt64
+        try {
+            ret = invoke8(args) as NativePointer | number | UInt64
+        } finally {
+            emotionCallFromUs = false
+        }
+        console.log(`messageSendEmotion: ret=${ret}`)
+        return 1
     } catch (error) {
+        emotionCallFromUs = false
         console.error('messageSendEmotion failed:', error)
         return -1
     }
@@ -585,135 +700,154 @@ export function getNextPage(id: number): number {
 }
 
 /**
- * 下载附件（图片、视频、文件）
- * @param id 消息ID
+ * 下载附件（对齐 WCF DownloadAttach）
+ * @param id 消息 MsgSvrID（建议字符串，避免 JS 精度丢失）
  * @param thumb 缩略图路径（视频需要）
- * @param extra 图片或文件路径
+ * @param extra 图片或文件保存路径
  * @returns 成功返回1或0，失败返回-1
  */
-export const downloadAttach = (id: number, thumb: string, extra: string): number => {
+export const downloadAttach = (id: number | string, thumb: string, extra: string): number => {
     console.log('downloadAttach:', id, thumb, extra)
+    let pChatMsg: NativePointer | null = null
+    let freeChatMsg: NativeFunction<any, any> | null = null
     try {
-        // 检查文件是否已存在，避免重复下载
-        // if (hasPath(extra)) {
-        //     console.log('文件已存在:', extra)
-        //     return 0;
-        // }
+        if (extra && pathExistsNative(extra)) {
+            console.log('downloadAttach: 目标已存在，跳过', extra)
+            return 0
+        }
 
-        // 获取localId和dbIdx
-        console.log('getLocalIdAndDbIdx:', id)
-        const result = getLocalIdAndDbIdx(id);
-        console.log('result:', result)
+        const result = getLocalIdAndDbIdx(id)
         if (!result) {
-            console.error('获取消息localId失败，请检查消息ID:', id);
-            return -1;
+            console.error('获取消息localId失败，请检查消息ID:', id)
+            return -1
         }
 
-        const { localId, dbIdx } = result;
-        console.log('localId:', localId, 'dbIdx:', dbIdx);
+        const { localId, dbIdx } = result
+        console.log('downloadAttach localId=', localId, 'dbIdx=', dbIdx)
 
-        // 获取相关函数地址
-        const newChatMsgAddr = moduleBaseAddress.add(offsets.OS_NEW);
-        const freeChatMsgAddr = moduleBaseAddress.add(offsets.OS_FREE);
-        const getChatMgrAddr = moduleBaseAddress.add(offsets.OS_GET_CHAT_MGR);
-        const getPreDownloadMgrAddr = moduleBaseAddress.add(offsets.OS_GET_PRE_DOWNLOAD_MGR);
-        const pushAttachTaskAddr = moduleBaseAddress.add(offsets.OS_PUSH_ATTACH_TASK);
-        const getMgrByPrefixLocalIdAddr = moduleBaseAddress.add(offsets.OS_GET_MGR_BY_PREFIX_LOCAL_ID);
+        const newChatMsg = new NativeFunction(moduleBaseAddress.add(offsets.OS_NEW), 'pointer', ['pointer'])
+        freeChatMsg = new NativeFunction(moduleBaseAddress.add(offsets.OS_FREE), 'void', ['pointer'])
+        const getChatMgr = new NativeFunction(moduleBaseAddress.add(offsets.OS_GET_CHAT_MGR), 'pointer', [])
+        const getPreDownloadMgr = new NativeFunction(
+            moduleBaseAddress.add(offsets.OS_GET_PRE_DOWNLOAD_MGR),
+            'pointer',
+            []
+        )
+        const getMgrByPrefixLocalId = new NativeFunction(
+            moduleBaseAddress.add(offsets.OS_GET_MGR_BY_PREFIX_LOCAL_ID),
+            'void',
+            ['uint64', 'pointer']
+        )
 
-        // 创建NativeFunction对象
-        const newChatMsg = new NativeFunction(newChatMsgAddr, 'pointer', ['pointer']);
-        const freeChatMsg = new NativeFunction(freeChatMsgAddr, 'void', ['pointer']);
-        const getChatMgr = new NativeFunction(getChatMgrAddr, 'pointer', []);
-        const getPreDownloadMgr = new NativeFunction(getPreDownloadMgrAddr, 'pointer', []);
-        const pushAttachTask = new NativeFunction(pushAttachTaskAddr, 'int64', ['pointer', 'pointer', 'int32', 'int32']);
-        const getMgrByPrefixLocalId = new NativeFunction(getMgrByPrefixLocalIdAddr, 'void', ['int64', 'pointer']);
+        // LARGE_INTEGER: LowPart=localId, HighPart=dbIdx
+        const l = Memory.alloc(0x8)
+        l.writeU32(localId >>> 0)
+        l.add(0x4).writeU32(dbIdx >>> 0)
+        const quadPart = l.readU64()
 
-        // 创建LARGE_INTEGER结构 - 这里使用int64代替
-        const l = Memory.alloc(0x8);
-        l.writeU32(dbIdx); // HighPart
-        l.add(0x4).writeU32(localId); // LowPart
-        
-        // 打印QuadPart值进行调试
-        const quadPart = l.readS64();
-        console.log('QuadPart值:', quadPart);
+        const buff = Memory.alloc(0x460)
+        buff.writeByteArray(Array(0x460).fill(0))
 
-        // 分配内存
-        const buff = Memory.alloc(0x460);
-        buff.writeByteArray(Array(0x460).fill(0));
+        pChatMsg = newChatMsg(buff)
+        getChatMgr()
+        getMgrByPrefixLocalId(quadPart, pChatMsg)
 
-        // 创建聊天消息对象
-        const pChatMsg = newChatMsg(buff);
-        getChatMgr();
-        
-        // 这里使用int64
-        getMgrByPrefixLocalId(quadPart, pChatMsg);
+        const type = buff.add(0x38).readU32()
+        console.log('downloadAttach msgType=', type.toString(16))
 
-        // 获取消息类型
-        const type = buff.add(0x38).readU32();
-        console.log('消息类型:', type.toString(16));
+        let savePath = ''
+        let thumbPath = ''
 
-        let savePath = "";
-        let thumbPath = "";
-
-        // 根据消息类型设置保存路径
         switch (type) {
-            case 0x03: // 图片
-                savePath = extra;
-                break;
+            case 0x03:
+                savePath = extra
+                thumbPath = thumb || ''
+                break
             case 0x3E:
-            case 0x2B: // 视频
-                thumbPath = thumb;
-                // 简化路径处理，避免使用URL对象
-                const lastDotIndex = thumb.lastIndexOf('.');
-                if (lastDotIndex !== -1) {
-                    savePath = thumb.substring(0, lastDotIndex) + '.mp4';
+            case 0x2B:
+                thumbPath = thumb
+                if (thumb) {
+                    const lastDotIndex = thumb.lastIndexOf('.')
+                    savePath = lastDotIndex !== -1
+                        ? thumb.substring(0, lastDotIndex) + '.mp4'
+                        : thumb + '.mp4'
                 } else {
-                    savePath = thumb + '.mp4';
+                    savePath = extra
                 }
-                break;
-            case 0x31: // 文件
-                savePath = extra;
-                break;
+                break
+            case 0x31:
+                savePath = extra
+                break
             default:
-                console.log('未知消息类型:', type.toString(16));
-                freeChatMsg(pChatMsg);
-                return -1;
+                console.log('downloadAttach: 未知/不支持类型', type.toString(16))
+                freeChatMsg(pChatMsg)
+                return -1
         }
 
-        // 检查文件是否已存在
-        // if (hasPath(savePath)) {
-        //    freeChatMsg(pChatMsg);
-        //    return 0;
-        // }
+        if (!savePath) {
+            console.error('downloadAttach: savePath 为空')
+            freeChatMsg(pChatMsg)
+            return -1
+        }
 
-        console.log('下载路径:', savePath);
+        if (pathExistsNative(savePath)) {
+            console.log('downloadAttach: savePath 已存在', savePath)
+            freeChatMsg(pChatMsg)
+            return 0
+        }
 
-        // 为保存路径创建父目录 - 简化处理
-        // 这里应该是创建目录的代码，但在Frida中直接省略
+        try {
+            ensureParentDirNative(savePath)
+        } catch (e) {
+            console.warn('downloadAttach ensureParentDir skipped:', e)
+        }
+        console.log('downloadAttach path=', savePath, 'thumb=', thumbPath)
 
-        // 创建WxString对象
-        const savePathPtr = writeWStringPtr(savePath);
-        const thumbPathPtr = writeWStringPtr(thumbPath);
-        console.log('savePathPtr:', savePathPtr, 'thumbPathPtr:', thumbPathPtr);
+        // WCF: HeapAlloc WxString + memcpy 到 buff+0x280/0x2A0
+        const pThumb = createWxStringHeap(thumbPath || '')
+        const pSave = createWxStringHeap(savePath)
+        Memory.copy(buff.add(0x280), pThumb, WX_STRING_SIZE)
+        Memory.copy(buff.add(0x2A0), pSave, WX_STRING_SIZE)
+        buff.add(0x40C).writeU32(1)
 
-        // 设置缓冲区参数
-        buff.add(0x280).writePointer(thumbPathPtr);
-        buff.add(0x2A0).writePointer(savePathPtr);
-        buff.add(0x40C).writeU32(1);
+        const mgr = getPreDownloadMgr()
+        if (!mgr || mgr.isNull()) {
+            console.error('downloadAttach: PreDownloadMgr 为空')
+            freeChatMsg(pChatMsg)
+            return -1
+        }
 
-        // 执行下载任务
-        const mgr = getPreDownloadMgr();
-        console.log('预下载管理器:', mgr);
-        const status = pushAttachTask(mgr, pChatMsg, 0, 1);
-        console.log('下载任务状态:', status);
+        // 经 CModule 调用，避免个别 Frida/ABI 问题
+        const cm = new CModule(`
+            #include <stdint.h>
+            typedef uint64_t (*fn4_t)(uint64_t, uint64_t, uint64_t, uint64_t);
+            typedef struct { uint64_t fn, a1, a2, a3, a4; } call4_t;
+            uint64_t invoke4(call4_t *p) {
+                return ((fn4_t)p->fn)(p->a1, p->a2, p->a3, p->a4);
+            }
+        `)
+        const invoke4 = new NativeFunction(cm.invoke4, 'uint64', ['pointer'])
+        const args = Memory.alloc(8 * 5)
+        args.writePointer(moduleBaseAddress.add(offsets.OS_PUSH_ATTACH_TASK))
+        args.add(8).writePointer(mgr)
+        args.add(16).writePointer(pChatMsg)
+        args.add(24).writeU64(0)
+        args.add(32).writeU64(1)
 
-        // 释放资源
-        freeChatMsg(pChatMsg);
-
-        return Number(status) > 0 ? 1 : -1;
+        console.log('downloadAttach: push...')
+        const status = Number(invoke4(args))
+        console.log('downloadAttach push status=', status)
+        freeChatMsg(pChatMsg)
+        pChatMsg = null
+        return status > 0 ? 1 : (status === 0 ? 0 : -1)
     } catch (error) {
-        console.error('下载附件失败:', error);
-        return -1;
+        console.error('下载附件失败:', error)
+        try {
+            if (pChatMsg && freeChatMsg) {
+                freeChatMsg(pChatMsg)
+            }
+        } catch (e2) {}
+        return -1
     }
 }
 
@@ -797,38 +931,43 @@ export const decryptImage = (src: string, dir: string): string => {
 }
 
 /**
- * 获取语音消息数据并落盘（对齐 WCF GetAudio）
- * Frida 环境无 Codec.lib，先导出 silk；若目录下已有同名 mp3 则直接返回。
- * @param id 消息ID
- * @param dir 保存目录
- * @returns 文件路径（优先 .mp3，否则 .silk）
+ * 获取语音消息并转 mp3（对齐 WCF GetAudio / Silk2Mp3）
+ * 流程：MediaMSG 取 Buf → 写 .silk → pysilk+ffmpeg → .mp3
+ * @returns 优先返回 .mp3；转码失败则回退 .silk
  */
-export const getAudio = (id: number, dir: string): string => {
+export const getAudio = (id: number | string, dir: string): string => {
     try {
+        const idStr = String(id)
         const baseDir = (dir.endsWith('/') || dir.endsWith('\\')) ? dir : (dir + '\\');
-        const mp3path = (baseDir + id.toString() + '.mp3').replace(/\//g, '\\');
-        const silkPath = (baseDir + id.toString() + '.silk').replace(/\//g, '\\');
+        const mp3path = (baseDir + idStr + '.mp3').replace(/\//g, '\\');
+        const silkPath = (baseDir + idStr + '.silk').replace(/\//g, '\\');
 
         if (hasPath(mp3path)) {
             return mp3path;
         }
-        if (hasPath(silkPath)) {
-            return silkPath;
+
+        let haveSilk = hasPath(silkPath)
+        if (!haveSilk) {
+            const silk = getAudioData(id);
+            if (!silk || silk.length === 0) {
+                console.error('Empty audio data.');
+                return '';
+            }
+            ensureParentDirNative(silkPath);
+            if (!writeFileBytes(silkPath, silk)) {
+                console.error('写入 silk 失败:', silkPath);
+                return '';
+            }
+            haveSilk = true
+            console.log('语音已导出 silk:', silkPath);
         }
 
-        const silk = getAudioData(id);
-        if (!silk || silk.length === 0) {
-            console.error('Empty audio data.');
-            return '';
+        if (haveSilk && convertSilkToMp3(silkPath, mp3path, 24000)) {
+            console.log('语音已转 mp3:', mp3path);
+            return mp3path;
         }
 
-        ensureParentDirNative(silkPath);
-        if (!writeFileBytes(silkPath, silk)) {
-            console.error('写入 silk 失败:', silkPath);
-            return '';
-        }
-
-        console.log('语音已导出为 silk（无内置 silk→mp3，可外部转码）:', silkPath);
+        console.warn('silk→mp3 失败，回退返回 silk:', silkPath);
         return silkPath;
     } catch (error) {
         console.error('获取语音失败:', error);

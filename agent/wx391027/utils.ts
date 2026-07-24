@@ -341,6 +341,206 @@ export const pathExistsNative = (targetPath: string): boolean => {
   }
 }
 
+/** 查找可用的 python.exe（WeChat 进程 PATH 可能不含用户环境） */
+export const findPythonExe = (): string => {
+  const candidates = [
+    'C:\\ProgramData\\anaconda3\\python.exe',
+    'C:\\Python312\\python.exe',
+    'C:\\Python314\\python.exe',
+    'C:\\Python311\\python.exe',
+    'C:\\Python310\\python.exe',
+  ]
+  const userProfile = (() => {
+    try {
+      const GetEnvironmentVariableW = new NativeFunction(
+        Module.getExportByName('kernel32.dll', 'GetEnvironmentVariableW'),
+        'uint32',
+        ['pointer', 'pointer', 'uint32']
+      )
+      const name = Memory.allocUtf16String('USERPROFILE')
+      const buf = Memory.alloc(512 * 2)
+      const n = GetEnvironmentVariableW(name, buf, 512)
+      return n > 0 ? (buf.readUtf16String() || '') : ''
+    } catch (e) {
+      return ''
+    }
+  })()
+  if (userProfile) {
+    candidates.push(
+      `${userProfile}\\anaconda3\\python.exe`,
+      `${userProfile}\\miniconda3\\python.exe`,
+      `${userProfile}\\AppData\\Local\\Programs\\Python\\Python312\\python.exe`,
+      `${userProfile}\\AppData\\Local\\Programs\\Python\\Python311\\python.exe`,
+    )
+  }
+  for (const c of candidates) {
+    if (pathExistsNative(c)) {
+      return c
+    }
+  }
+  return 'python'
+}
+
+/** 同步执行命令行（CreateProcessW + WaitForSingleObject），返回 exit code；失败 -1 */
+export const runCmdBlocking = (commandLine: string, timeoutMs = 60000): number => {
+  try {
+    const CreateProcessW = new NativeFunction(
+      Module.getExportByName('kernel32.dll', 'CreateProcessW'),
+      'int',
+      ['pointer', 'pointer', 'pointer', 'pointer', 'int', 'uint32', 'pointer', 'pointer', 'pointer', 'pointer']
+    )
+    const WaitForSingleObject = new NativeFunction(
+      Module.getExportByName('kernel32.dll', 'WaitForSingleObject'),
+      'uint32',
+      ['pointer', 'uint32']
+    )
+    const GetExitCodeProcess = new NativeFunction(
+      Module.getExportByName('kernel32.dll', 'GetExitCodeProcess'),
+      'int',
+      ['pointer', 'pointer']
+    )
+    const CloseHandle = new NativeFunction(
+      Module.getExportByName('kernel32.dll', 'CloseHandle'),
+      'int',
+      ['pointer']
+    )
+
+    // STARTUPINFOW 68/104 bytes on x64; PROCESS_INFORMATION 24 bytes
+    const si = Memory.alloc(104)
+    for (let i = 0; i < 104; i++) si.add(i).writeU8(0)
+    si.writeU32(104) // cb
+    const pi = Memory.alloc(24)
+    for (let i = 0; i < 24; i++) pi.add(i).writeU8(0)
+
+    // lpCommandLine must be writable
+    const cmdBuf = Memory.allocUtf16String(commandLine)
+    const CREATE_NO_WINDOW = 0x08000000
+    const ok = CreateProcessW(
+      ptr(0),
+      cmdBuf,
+      ptr(0),
+      ptr(0),
+      0,
+      CREATE_NO_WINDOW,
+      ptr(0),
+      ptr(0),
+      si,
+      pi
+    )
+    if (!ok) {
+      console.error('CreateProcessW failed for:', commandLine)
+      return -1
+    }
+    const hProcess = pi.readPointer()
+    const hThread = pi.add(Process.pointerSize).readPointer()
+    WaitForSingleObject(hProcess, timeoutMs >>> 0)
+    const codeBuf = Memory.alloc(4)
+    GetExitCodeProcess(hProcess, codeBuf)
+    const code = codeBuf.readU32()
+    CloseHandle(hThread)
+    CloseHandle(hProcess)
+    return code
+  } catch (e) {
+    console.error('runCmdBlocking failed:', e)
+    return -1
+  }
+}
+
+/** silk -> mp3（外部 python pysilk + ffmpeg） */
+export const convertSilkToMp3 = (silkPath: string, mp3Path: string, sampleRate = 24000): boolean => {
+  try {
+    if (!pathExistsNative(silkPath)) {
+      console.error('convertSilkToMp3: silk 不存在', silkPath)
+      return false
+    }
+    if (pathExistsNative(mp3Path) && getFileSizeNative(mp3Path) > 0) {
+      return true
+    }
+
+    const scriptCandidates = [
+      'C:\\GitHub\\frida-agent\\agent\\wx391027\\tools\\silk2mp3.py',
+    ]
+    let script = ''
+    for (const s of scriptCandidates) {
+      if (pathExistsNative(s)) {
+        script = s
+        break
+      }
+    }
+    if (!script) {
+      console.error('convertSilkToMp3: 找不到 silk2mp3.py')
+      return false
+    }
+
+    const py = findPythonExe()
+    const ffmpeg = pathExistsNative('C:\\ffmpeg\\bin\\ffmpeg.exe')
+      ? 'C:\\ffmpeg\\bin\\ffmpeg.exe'
+      : 'ffmpeg'
+    // 参数：silk mp3 sr [ffmpeg]
+    const cmd =
+      `cmd.exe /C ""${py}" "${script}" "${silkPath}" "${mp3Path}" ${sampleRate} "${ffmpeg}""`
+    console.log('convertSilkToMp3:', cmd)
+    const code = runCmdBlocking(cmd, 120000)
+    if (code !== 0) {
+      console.error('convertSilkToMp3 exit=', code)
+      return false
+    }
+    return pathExistsNative(mp3Path) && getFileSizeNative(mp3Path) > 0
+  } catch (e) {
+    console.error('convertSilkToMp3 failed:', e)
+    return false
+  }
+}
+
+/** 获取本地文件大小（字节）；失败返回 -1 */
+export const getFileSizeNative = (targetPath: string): number => {
+  try {
+    const CreateFileW = new NativeFunction(
+      Module.getExportByName('kernel32.dll', 'CreateFileW'),
+      'pointer',
+      ['pointer', 'uint32', 'uint32', 'pointer', 'uint32', 'uint32', 'pointer']
+    )
+    const GetFileSizeEx = new NativeFunction(
+      Module.getExportByName('kernel32.dll', 'GetFileSizeEx'),
+      'int',
+      ['pointer', 'pointer']
+    )
+    const CloseHandle = new NativeFunction(
+      Module.getExportByName('kernel32.dll', 'CloseHandle'),
+      'int',
+      ['pointer']
+    )
+    const GENERIC_READ = 0x80000000
+    const FILE_SHARE_READ = 0x1
+    const OPEN_EXISTING = 3
+    const FILE_ATTRIBUTE_NORMAL = 0x80
+    const INVALID_HANDLE_VALUE = ptr(-1)
+    const pathPtr = Memory.allocUtf16String(targetPath)
+    const h = CreateFileW(
+      pathPtr,
+      GENERIC_READ,
+      FILE_SHARE_READ,
+      ptr(0),
+      OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL,
+      ptr(0)
+    )
+    if (!h || h.equals(INVALID_HANDLE_VALUE)) {
+      return -1
+    }
+    const sizeBuf = Memory.alloc(8)
+    const ok = GetFileSizeEx(h, sizeBuf)
+    CloseHandle(h)
+    if (!ok) {
+      return -1
+    }
+    // LARGE_INTEGER：低 32 + 高 32；GIF 一般远小于 4GB
+    return sizeBuf.readU32()
+  } catch (e) {
+    return -1
+  }
+}
+
 export const hasPath = (path: string | undefined) => {
   console.log('hasPath:', path)
   if (!path || path.length === 0) {
@@ -349,49 +549,242 @@ export const hasPath = (path: string | undefined) => {
   return pathExistsNative(path)
 }
 
-/**
- * 创建对齐 WCF 的 WxString（size/capacity 为字符数）
- */
-export const createWxString = (str: string): NativePointer => {
-  const structPtr = Memory.alloc(WX_STRING_SIZE)
-  structPtr.writeByteArray(Array(WX_STRING_SIZE).fill(0))
-  const dataPtr = Memory.alloc((str.length + 1) * 2)
+/** 防止 Frida GC 回收导致原生调用期间字符串悬空 */
+const wxStringKeepAlive: NativePointer[] = []
+
+/** ProcessHeap 分配（微信侧可能 HeapFree，勿用 Frida Memory.alloc 传给会接管内存的 API） */
+export const heapAlloc = (size: number): NativePointer => {
+  const GetProcessHeap = new NativeFunction(
+    Module.getExportByName('kernel32.dll', 'GetProcessHeap'),
+    'pointer',
+    []
+  )
+  const HeapAllocFn = new NativeFunction(
+    Module.getExportByName('kernel32.dll', 'HeapAlloc'),
+    'pointer',
+    ['pointer', 'uint32', 'ulong']
+  )
+  const HEAP_ZERO_MEMORY = 0x8
+  const p = HeapAllocFn(GetProcessHeap(), HEAP_ZERO_MEMORY, size)
+  if (!p || p.isNull()) {
+    throw new Error(`HeapAlloc(${size}) failed`)
+  }
+  return p
+}
+
+/** 对齐 WCF NewWxStringFromWstr：ProcessHeap + 宽字符个数 */
+export const createWxStringHeap = (str: string): NativePointer => {
+  const dataPtr = heapAlloc((str.length + 1) * 2)
   dataPtr.writeUtf16String(str)
+  const structPtr = heapAlloc(WX_STRING_SIZE)
   structPtr.writePointer(dataPtr)
-  structPtr.add(Process.pointerSize).writeU32(str.length)
-  structPtr.add(Process.pointerSize + 4).writeU32(str.length)
+  structPtr.add(8).writeU32(str.length)
+  structPtr.add(12).writeU32(str.length)
   return structPtr
 }
 
 /**
- * 创建 vector<WxString> 的 RawVector（start/finish/end），元素为内联 WxString
+ * 创建微信字符串结构（WCF WxString：ptr + DWORD size + DWORD capacity + ansi + clen）
+ * 使用 Memory.allocUtf16String，避免自管缓冲区写入异常。
  */
-export const createWxStringVector = (ids: string[]): NativePointer => {
-  const cleaned = ids.map(s => s.trim()).filter(Boolean)
-  const count = Math.max(cleaned.length, 1)
-  const arrayPtr = Memory.alloc(WX_STRING_SIZE * count)
-  arrayPtr.writeByteArray(Array(WX_STRING_SIZE * count).fill(0))
+export const createWxString = (str: string, lengthInBytes = true): NativePointer => {
+  const dataPtr = Memory.allocUtf16String(str)
+  wxStringKeepAlive.push(dataPtr)
+  const structPtr = Memory.alloc(WX_STRING_SIZE)
+  for (let i = 0; i < WX_STRING_SIZE; i++) {
+    structPtr.add(i).writeU8(0)
+  }
+  const len = lengthInBytes ? str.length * 2 : str.length
+  const cap = Math.max(len, lengthInBytes ? 16 : 8)
+  structPtr.writePointer(dataPtr)
+  structPtr.add(8).writeU32(len >>> 0)
+  structPtr.add(12).writeU32(cap >>> 0)
+  wxStringKeepAlive.push(structPtr)
+  return structPtr
+}
 
+/**
+ * 将 WxString 字段直接写入目标地址（用于 vector 内联元素，避免 Memory.copy 异常）
+ */
+export const writeWxStringTo = (
+  dest: NativePointer,
+  str: string,
+  lengthInBytes = false,
+): void => {
+  const dataPtr = Memory.allocUtf16String(str)
+  wxStringKeepAlive.push(dataPtr)
+  for (let i = 0; i < WX_STRING_SIZE; i++) {
+    dest.add(i).writeU8(0)
+  }
+  const len = lengthInBytes ? str.length * 2 : str.length
+  const cap = Math.max(len, lengthInBytes ? 16 : 8)
+  dest.writePointer(dataPtr)
+  dest.add(8).writeU32(len >>> 0)
+  dest.add(12).writeU32(cap >>> 0)
+}
+
+/**
+ * MSVC x64 std::wstring 布局：ptr(8) + reserved(8) + size(8) + capacity(8)
+ */
+export const createMsvcWString = (str: string): NativePointer => {
+  const dataPtr = Memory.allocUtf16String(str)
+  wxStringKeepAlive.push(dataPtr)
+  const structPtr = Memory.alloc(0x20)
+  for (let i = 0; i < 0x20; i++) {
+    structPtr.add(i).writeU8(0)
+  }
+  structPtr.writePointer(dataPtr)
+  structPtr.add(16).writeU64(str.length)
+  structPtr.add(24).writeU64(Math.max(str.length, 8))
+  wxStringKeepAlive.push(structPtr)
+  return structPtr
+}
+
+export const createMsvcWStringVector = (ids: string[]): NativePointer => {
+  const cleaned = ids.map(s => s.trim()).filter(Boolean)
   if (cleaned.length === 0) {
-    // 空向量占位一个空 WxString
-    arrayPtr.writePointer(Memory.alloc(2))
-  } else {
-    for (let i = 0; i < cleaned.length; i++) {
-      const s = cleaned[i]
-      const dataPtr = Memory.alloc((s.length + 1) * 2)
-      dataPtr.writeUtf16String(s)
-      const item = arrayPtr.add(i * WX_STRING_SIZE)
-      item.writePointer(dataPtr)
-      item.add(Process.pointerSize).writeU32(s.length)
-      item.add(Process.pointerSize + 4).writeU32(s.length)
-    }
+    throw new Error('createMsvcWStringVector: empty ids')
+  }
+  const stride = 0x20
+  const count = cleaned.length
+  const arrayPtr = Memory.alloc(stride * count)
+  for (let i = 0; i < stride * count; i++) {
+    arrayPtr.add(i).writeU8(0)
+  }
+  for (let i = 0; i < count; i++) {
+    const slot = arrayPtr.add(i * stride)
+    const dataPtr = Memory.allocUtf16String(cleaned[i])
+    wxStringKeepAlive.push(dataPtr)
+    slot.writePointer(dataPtr)
+    slot.add(16).writeU64(cleaned[i].length)
+    slot.add(24).writeU64(Math.max(cleaned[i].length, 8))
+  }
+  const rawVector = Memory.alloc(Process.pointerSize * 3)
+  const finish = arrayPtr.add(stride * count)
+  rawVector.writePointer(arrayPtr)
+  rawVector.add(Process.pointerSize).writePointer(finish)
+  rawVector.add(Process.pointerSize * 2).writePointer(finish)
+  wxStringKeepAlive.push(arrayPtr, rawVector)
+  return rawVector
+}
+
+/** 对齐 WCF NewWxString：size/capacity 为宽字符个数 */
+export const createWxStringChars = (str: string): NativePointer => createWxString(str, false)
+
+/**
+ * 创建 std::vector<WxString> 的 Release 布局：{ start, finish, end }
+ * 元素为内联 WxString（步长 0x20），与 WCF chatroom_mgmt 一致。
+ */
+export const createWxStringVector = (ids: string[], lengthInBytes = false): NativePointer => {
+  const cleaned = ids.map(s => s.trim()).filter(Boolean)
+  if (cleaned.length === 0) {
+    throw new Error('createWxStringVector: empty ids')
   }
 
-  const used = cleaned.length === 0 ? 1 : cleaned.length
+  const count = cleaned.length
+  const arrayPtr = Memory.alloc(WX_STRING_SIZE * count)
+  for (let i = 0; i < WX_STRING_SIZE * count; i++) {
+    arrayPtr.add(i).writeU8(0)
+  }
+
+  for (let i = 0; i < count; i++) {
+    writeWxStringTo(arrayPtr.add(i * WX_STRING_SIZE), cleaned[i], lengthInBytes)
+  }
+
   const rawVector = Memory.alloc(Process.pointerSize * 3)
+  const finish = arrayPtr.add(WX_STRING_SIZE * count)
   rawVector.writePointer(arrayPtr)
-  rawVector.add(Process.pointerSize).writePointer(arrayPtr.add(WX_STRING_SIZE * used))
-  rawVector.add(Process.pointerSize * 2).writePointer(arrayPtr.add(WX_STRING_SIZE * used))
+  rawVector.add(Process.pointerSize).writePointer(finish)
+  rawVector.add(Process.pointerSize * 2).writePointer(finish)
+  wxStringKeepAlive.push(arrayPtr, rawVector)
+  return rawVector
+}
+
+/**
+ * 按指定步长创建内联 WxString 向量（用于排查不同微信字符串布局）
+ */
+export const createWxStringVectorStride = (
+  ids: string[],
+  stride: number,
+  lengthInBytes = true
+): NativePointer => {
+  const cleaned = ids.map(s => s.trim()).filter(Boolean)
+  if (cleaned.length === 0) {
+    throw new Error('createWxStringVectorStride: empty ids')
+  }
+  const count = cleaned.length
+  const arrayPtr = Memory.alloc(stride * count)
+  arrayPtr.writeByteArray(Array(stride * count).fill(0))
+
+  for (let i = 0; i < count; i++) {
+    const wx = lengthInBytes ? writeWStringPtr(cleaned[i]) : createWxStringChars(cleaned[i])
+    const copyLen = Math.min(stride, WX_STRING_SIZE)
+    Memory.copy(arrayPtr.add(i * stride), wx, copyLen)
+  }
+
+  const rawVector = Memory.alloc(Process.pointerSize * 3)
+  const finish = arrayPtr.add(stride * count)
+  rawVector.writePointer(arrayPtr)
+  rawVector.add(Process.pointerSize).writePointer(finish)
+  rawVector.add(Process.pointerSize * 2).writePointer(finish)
+  return rawVector
+}
+
+/**
+ * 64 位长度字段布局：ptr(8) + size(8) + cap(8)，常见于部分微信内部 string
+ */
+export const createWxStringU64 = (str: string, lengthInBytes = false): NativePointer => {
+  const structPtr = Memory.alloc(0x20)
+  structPtr.writeByteArray(Array(0x20).fill(0))
+  const dataPtr = Memory.alloc((str.length + 1) * 2)
+  dataPtr.writeUtf16String(str)
+  const len = lengthInBytes ? str.length * 2 : str.length
+  structPtr.writePointer(dataPtr)
+  structPtr.add(8).writeU64(len)
+  structPtr.add(16).writeU64(len)
+  return structPtr
+}
+
+export const createWxStringVectorU64 = (ids: string[], lengthInBytes = false): NativePointer => {
+  const cleaned = ids.map(s => s.trim()).filter(Boolean)
+  if (cleaned.length === 0) {
+    throw new Error('createWxStringVectorU64: empty ids')
+  }
+  const stride = 0x18
+  const count = cleaned.length
+  const arrayPtr = Memory.alloc(stride * count)
+  arrayPtr.writeByteArray(Array(stride * count).fill(0))
+  for (let i = 0; i < count; i++) {
+    const wx = createWxStringU64(cleaned[i], lengthInBytes)
+    Memory.copy(arrayPtr.add(i * stride), wx, stride)
+  }
+  const rawVector = Memory.alloc(Process.pointerSize * 3)
+  const finish = arrayPtr.add(stride * count)
+  rawVector.writePointer(arrayPtr)
+  rawVector.add(Process.pointerSize).writePointer(finish)
+  rawVector.add(Process.pointerSize * 2).writePointer(finish)
+  return rawVector
+}
+
+/**
+ * 备用：WxString* 指针数组向量
+ */
+export const createWxStringPtrVector = (ids: string[], lengthInBytes = true): NativePointer => {
+  const cleaned = ids.map(s => s.trim()).filter(Boolean)
+  if (cleaned.length === 0) {
+    throw new Error('createWxStringPtrVector: empty ids')
+  }
+  const ptrSize = Process.pointerSize
+  const start = Memory.alloc(ptrSize * cleaned.length)
+  for (let i = 0; i < cleaned.length; i++) {
+    const wx = lengthInBytes ? writeWStringPtr(cleaned[i]) : createWxStringChars(cleaned[i])
+    start.add(i * ptrSize).writePointer(wx)
+  }
+  const rawVector = Memory.alloc(ptrSize * 3)
+  const finish = start.add(ptrSize * cleaned.length)
+  rawVector.writePointer(start)
+  rawVector.add(ptrSize).writePointer(finish)
+  rawVector.add(ptrSize * 2).writePointer(finish)
   return rawVector
 }
 

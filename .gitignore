@@ -6,6 +6,7 @@ package-lock.json
 /dist/
 agent/**/*.js
 !agent/**/test.js
+!agent/wx391027/tools/start.js
 
 # 旧文件
 /_agent.js

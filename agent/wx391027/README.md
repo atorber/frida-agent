@@ -8,9 +8,10 @@
 |获取联系人|Y|`GET /api/contacts`、`GET /api/contact`|
 |获取群列表|Y|`GET /api/rooms`|
 |获取群详情|Y|`GET /api/room?roomId=xxx`|
+|获取群成员|Y|`GET /api/room/members?roomId=xxx`|
 |获取可查询数据库|Y|`GET /api/db/names`|
 |获取数据库所有表|Y|`GET /api/db/tables?dbName=xxx`|
-|获取语音消息|Y|`POST /api/message/audio`（导出 silk；无内置 silk→mp3）|
+|获取语音消息|Y|`POST /api/message/audio`（silk→mp3，需本机 pysilk+ffmpeg）|
 |发送文本消息|Y|`POST /api/message/text`|
 |发送@文本消息|Y|`POST /api/message/text`，`atWxids`|
 |发送图片消息|Y|`POST /api/message/image`|
@@ -23,20 +24,21 @@
 |查询数据库|Y|`POST /api/db/query`|
 |朋友圈接收|Y|`GET\|POST /api/sns/listen`|
 |刷新朋友圈|Y|`POST /api/sns/refresh`（需先开启 listen）|
-|下载图片、视频、文件|Y|`POST /api/message/downloadAttach`|
-|解密图片|Y|`POST /api/message/decryptImage`|
+|下载图片、视频、文件|Y|`POST /api/message/downloadAttach`；收消息后自动下载|
+|解密图片|Y|`POST /api/message/decryptImage`；收图片后自动解密|
 |添加群成员|Y|`POST /api/room/add`|
 |删除群成员|Y|`POST /api/room/del`|
 |邀请群成员|Y|`POST /api/room/invite`|
 |修改群名|Y|`POST /api/room/topic`|
 |消息推送|Y|`GET\|POST /api/push/config`|
 |视频号视频下载|Y|`POST /api/message/downloadFinderVideo`|
+|HTTP 优雅启停|Y|`POST /api/server/stop` 释放端口（不杀微信）；`POST /api/server/start` 再开|
 
 ### 与 WCF 对齐说明
 
 - 已对齐 WCF 3.9.10.27 **实际可用**能力。
 - WCF 自身未实现/已禁用项（发 XML、通过好友、收款、OCR、撤回、扫码 URL）未迁移。
-- 语音：Frida 环境无 `Codec.lib`，`getAudio` 导出 `.silk`；若目录已有同名 `.mp3` 则直接返回。
+- 语音：type=34 → 导出 `.silk` 并自动转 `.mp3`（依赖本机 `pip install silk-python` + `ffmpeg`）
 
 ---
 
@@ -62,7 +64,7 @@ Windows 路径在 JSON 中需转义反斜杠，例如 `"C:\\\\Users\\\\me\\\\a.j
 
 ---
 
-### 1. 健康检查
+### 1. 健康检查 ok
 
 **`GET /api/health`**（或 `GET /`）
 
@@ -72,11 +74,36 @@ Windows 路径在 JSON 中需转义反斜杠，例如 `"C:\\\\Users\\\\me\\\\a.j
 curl "$BASE/api/health"
 ```
 
+#### 优雅退出 HTTP 监听（不杀微信）
+
+**推荐**：`npm run start` 已接住 Ctrl+C，会先 `stopHttpServer` 释放 `19088` 再卸载脚本。
+
+```bash
+cd agent
+npm run start
+# Ctrl+C → 关闭 HTTP，不杀微信
+```
+
+若用 `npm run start:wx391027:repl`（原生 Frida REPL），Ctrl+C **不会**自动关监听，请先：
+
+```bash
+curl -X POST "$BASE/api/server/stop"
+```
+
+再退出。也可在 REPL：`rpc.exports.stopHttpServer()`。
+
+```bash
+# 查看状态 / 手动启停
+curl "$BASE/api/server/status"
+curl -X POST "$BASE/api/server/stop"
+curl -X POST "$BASE/api/server/start"
+```
+
 ---
 
 ### 2. 登录 / 账号
 
-#### 2.1 查询登录状态
+#### 2.1 查询登录状态 ok
 
 **`GET /api/checkLogin`**
 
@@ -86,7 +113,7 @@ curl "$BASE/api/health"
 curl "$BASE/api/checkLogin"
 ```
 
-#### 2.2 获取自己的账号信息
+#### 2.2 获取自己的账号信息 ok
 
 **`GET /api/contacts/self`**
 
@@ -100,7 +127,7 @@ curl "$BASE/api/contacts/self"
 
 ### 3. 联系人
 
-#### 3.1 联系人列表
+#### 3.1 联系人列表 ok
 
 **`GET /api/contacts`**
 
@@ -110,7 +137,7 @@ curl "$BASE/api/contacts/self"
 curl "$BASE/api/contacts"
 ```
 
-#### 3.2 联系人详情
+#### 3.2 联系人详情 ok
 
 **`GET /api/contact`**
 
@@ -126,7 +153,7 @@ curl "$BASE/api/contact?contactId=filehelper"
 
 ### 4. 群聊
 
-#### 4.1 群列表
+#### 4.1 群列表 ok
 
 **`GET /api/rooms`**
 
@@ -136,7 +163,7 @@ curl "$BASE/api/contact?contactId=filehelper"
 curl "$BASE/api/rooms"
 ```
 
-#### 4.2 群详情
+#### 4.2 群详情 ok
 
 **`GET /api/room`**
 
@@ -145,12 +172,41 @@ curl "$BASE/api/rooms"
 | `roomId` | Query | 是 | 群 ID，如 `123456@chatroom` |
 
 ```bash
-curl "$BASE/api/room?roomId=12345678901@chatroom"
+curl "$BASE/api/room?roomId=21341182572@chatroom"
 ```
 
-#### 4.3 添加群成员（40 人以下群）
+#### 4.2.1 群成员列表 ok
+
+**`GET /api/room/members`**
+
+| 参数 | 位置 | 必填 | 说明 |
+|--|--|--|--|
+| `roomId` | Query | 是 | 群 ID |
+
+返回 `data.members[]`：`wxid` / `alias` / `name` / `remark` / `displayName`（群内昵称）/ 头像 URL。
+
+```bash
+curl "$BASE/api/room/members?roomId=21341182572@chatroom"
+```
+
+#### 4.2.2 单个群成员 ok
+
+**`GET /api/room/member`**
+
+| 参数 | 位置 | 必填 | 说明 |
+|--|--|--|--|
+| `roomId` | Query | 是 | 群 ID |
+| `contactId` | Query | 是 | 成员 wxid / 微信号 / 昵称 |
+
+```bash
+curl "$BASE/api/room/member?roomId=21341182572@chatroom&contactId=wxxxx"
+```
+
+#### 4.3 添加群成员
 
 **`POST /api/room/add`**
+
+先尝试原生 Add，失败则自动回退 Invite。
 
 | 参数 | 类型 | 必填 | 说明 |
 |--|--|--|--|
@@ -160,10 +216,10 @@ curl "$BASE/api/room?roomId=12345678901@chatroom"
 ```bash
 curl -X POST "$BASE/api/room/add" \
   -H "Content-Type: application/json" \
-  -d "{\"roomId\":\"12345678901@chatroom\",\"wxids\":\"wxid_aaa,wxid_bbb\"}"
+  -d "{\"roomId\":\"21341182572@chatroom\",\"wxids\":\"wxxxx\"}"
 ```
 
-#### 4.4 邀请群成员（40 人以上群）
+#### 4.4 邀请群成员
 
 **`POST /api/room/invite`**
 
@@ -175,10 +231,10 @@ curl -X POST "$BASE/api/room/add" \
 ```bash
 curl -X POST "$BASE/api/room/invite" \
   -H "Content-Type: application/json" \
-  -d "{\"roomId\":\"12345678901@chatroom\",\"wxids\":\"wxid_aaa\"}"
+  -d "{\"roomId\":\"21341182572@chatroom\",\"wxids\":\"wxid_aaa\"}"
 ```
 
-#### 4.5 删除群成员
+#### 4.5 删除群成员 ok
 
 **`POST /api/room/del`**
 
@@ -190,10 +246,10 @@ curl -X POST "$BASE/api/room/invite" \
 ```bash
 curl -X POST "$BASE/api/room/del" \
   -H "Content-Type: application/json" \
-  -d "{\"roomId\":\"12345678901@chatroom\",\"wxids\":\"wxid_aaa\"}"
+  -d "{\"roomId\":\"21341182572@chatroom\",\"wxids\":\"wxxxx\"}"
 ```
 
-#### 4.6 修改群名
+#### 4.6 修改群名 ok
 
 **`POST /api/room/topic`**
 
@@ -205,14 +261,14 @@ curl -X POST "$BASE/api/room/del" \
 ```bash
 curl -X POST "$BASE/api/room/topic" \
   -H "Content-Type: application/json" \
-  -d "{\"roomId\":\"12345678901@chatroom\",\"topic\":\"新群名称\"}"
+  -d "{\"roomId\":\"21341182572@chatroom\",\"topic\":\"新群名称\"}"
 ```
 
 ---
 
 ### 5. 消息发送
 
-#### 5.1 发送文本 / @
+#### 5.1 发送文本 / @ ok
 
 **`POST /api/message/text`**
 
@@ -231,15 +287,15 @@ curl -X POST "$BASE/api/message/text" \
 # 群聊 @指定人
 curl -X POST "$BASE/api/message/text" \
   -H "Content-Type: application/json" \
-  -d "{\"contactId\":\"12345678901@chatroom\",\"text\":\"请看一下\",\"atWxids\":[\"wxid_aaa\"]}"
+  -d "{\"contactId\":\"21341182572@chatroom\",\"text\":\"请看一下\",\"atWxids\":[\"wxxxx\"]}"
 
 # 群聊 @所有人
 curl -X POST "$BASE/api/message/text" \
   -H "Content-Type: application/json" \
-  -d "{\"contactId\":\"12345678901@chatroom\",\"text\":\"全体注意\",\"atWxids\":[\"notify@all\"]}"
+  -d "{\"contactId\":\"21341182572@chatroom\",\"text\":\"全体注意\",\"atWxids\":[\"notify@all\"]}"
 ```
 
-#### 5.2 发送图片
+#### 5.2 发送图片 ok
 
 **`POST /api/message/image`**
 
@@ -254,7 +310,7 @@ curl -X POST "$BASE/api/message/image" \
   -d "{\"contactId\":\"filehelper\",\"path\":\"C:\\\\GitHub\\\\frida-agent\\\\agent\\\\1.jpg\"}"
 ```
 
-#### 5.3 发送文件
+#### 5.3 发送文件 ok
 
 **`POST /api/message/file`**
 
@@ -266,10 +322,10 @@ curl -X POST "$BASE/api/message/image" \
 ```bash
 curl -X POST "$BASE/api/message/file" \
   -H "Content-Type: application/json" \
-  -d "{\"contactId\":\"filehelper\",\"path\":\"C:\\\\temp\\\\demo.pdf\"}"
+  -d "{\"contactId\":\"filehelper\",\"path\":\"C:\\\\GitHub\\\\frida-agent\\\\agent\\\\package.json\"}"
 ```
 
-#### 5.4 发送表情 / GIF
+#### 5.4 发送表情 / GIF ok
 
 **`POST /api/message/emotion`**
 
@@ -278,13 +334,15 @@ curl -X POST "$BASE/api/message/file" \
 | `contactId` | string | 是 | 接收人 / 群 |
 | `path` | string | 是 | 本地 gif/表情文件路径 |
 
+说明：对齐微信 UI——文件 **> 500KB** 时自动改走文件发送（`msg` 会提示「动图过大，已按文件发送」）。
+
 ```bash
 curl -X POST "$BASE/api/message/emotion" \
   -H "Content-Type: application/json" \
-  -d "{\"contactId\":\"filehelper\",\"path\":\"C:\\\\temp\\\\funny.gif\"}"
+  -d "{\"contactId\":\"filehelper\",\"path\":\"C:\\\\GitHub\\\\frida-agent\\\\agent\\\\funny.gif\"}"
 ```
 
-#### 5.5 发送链接卡片
+#### 5.5 发送链接卡片 ok
 
 **`POST /api/message/richText`**
 
@@ -304,7 +362,7 @@ curl -X POST "$BASE/api/message/richText" \
   -d "{\"receiver\":\"filehelper\",\"title\":\"示例标题\",\"url\":\"https://example.com\",\"digest\":\"这是摘要\",\"thumburl\":\"https://example.com/thumb.png\",\"account\":\"\",\"name\":\"示例号\"}"
 ```
 
-#### 5.6 拍一拍
+#### 5.6 拍一拍 ok
 
 **`POST /api/message/pat`**
 
@@ -316,29 +374,35 @@ curl -X POST "$BASE/api/message/richText" \
 ```bash
 curl -X POST "$BASE/api/message/pat" \
   -H "Content-Type: application/json" \
-  -d "{\"roomId\":\"12345678901@chatroom\",\"contactId\":\"wxid_aaa\"}"
+  -d "{\"roomId\":\"21341182572@chatroom\",\"contactId\":\"wxxxx\"}"
 ```
 
-#### 5.7 转发消息
+#### 5.7 转发消息 ok
 
 **`POST /api/message/forward`**
 
 | 参数 | 类型 | 必填 | 说明 |
 |--|--|--|--|
-| `msgId` | number/string | 是 | 消息 MsgSvrID |
+| `msgId` | string | 是 | 消息 MsgSvrID（**请用字符串**，大整数用 number 会丢精度） |
 | `receiver` | string | 是 | 转发目标（wxid 或群 ID） |
 
 ```bash
 curl -X POST "$BASE/api/message/forward" \
   -H "Content-Type: application/json" \
-  -d "{\"msgId\":1234567890123456,\"receiver\":\"filehelper\"}"
+  -d "{\"msgId\":\"8233065081616396038\",\"receiver\":\"filehelper\"}"
 ```
 
 ---
 
 ### 6. 媒体 / 附件
 
-#### 6.1 下载附件（图片 / 视频 / 文件）
+收到消息后会自动处理：
+- **图片 (type=3)**：`downloadAttach` → 轮询 `.dat` 就绪后 `decryptImage`
+- **视频 (43/62)**：自动 `downloadAttach`
+- **文件 (49/6)**：自动 `downloadAttach`
+- **语音 (34)**：导出 silk 并自动转 mp3 到 `WeChat Files\\...\\FridaAgent\\audio`
+
+#### 6.1 下载附件（图片 / 视频 / 文件） ok
 
 **`POST /api/message/downloadAttach`**
 
@@ -354,7 +418,7 @@ curl -X POST "$BASE/api/message/downloadAttach" \
   -d "{\"msgId\":1234567890123456,\"thumb\":\"\",\"extra\":\"C:\\\\temp\\\\out.jpg\"}"
 ```
 
-#### 6.2 解密图片（`.dat` XOR）
+#### 6.2 解密图片（`.dat` XOR）ok
 
 **`POST /api/message/decryptImage`**
 
@@ -371,14 +435,14 @@ curl -X POST "$BASE/api/message/decryptImage" \
 
 #### 6.3 导出语音
 
-**`POST /api/message/audio`**
+**`POST /api/message/audio`** ok
 
 | 参数 | 类型 | 必填 | 说明 |
 |--|--|--|--|
 | `msgId` | number/string | 是 | 语音消息 ID |
 | `dir` | string | 是 | 保存目录 |
 
-成功时 `data` 为文件路径（优先已有 `.mp3`，否则 `.silk`）。
+成功时 `data` 为文件路径（优先 `.mp3`；转码失败回退 `.silk`）。依赖：`pip install silk-python`，本机 `ffmpeg`。
 
 ```bash
 curl -X POST "$BASE/api/message/audio" \
@@ -408,7 +472,7 @@ curl -X POST "$BASE/api/message/downloadFinderVideo" \
 
 ### 7. 消息接收控制
 
-#### 7.1 消息类型表
+#### 7.1 消息类型表 ok
 
 **`GET /api/message/types`**
 
@@ -486,7 +550,7 @@ curl -X POST "$BASE/api/sns/refresh" \
 
 ### 9. 数据库
 
-#### 9.1 数据库名列表
+#### 9.1 数据库名列表 ok
 
 **`GET /api/db/names`**
 
@@ -494,7 +558,7 @@ curl -X POST "$BASE/api/sns/refresh" \
 curl "$BASE/api/db/names"
 ```
 
-#### 9.2 表列表
+#### 9.2 表列表 ok
 
 **`GET /api/db/tables`**
 
@@ -506,7 +570,7 @@ curl "$BASE/api/db/names"
 curl "$BASE/api/db/tables?dbName=MicroMsg.db"
 ```
 
-#### 9.3 执行查询
+#### 9.3 执行查询 ok
 
 **`POST /api/db/query`**
 
@@ -523,7 +587,7 @@ curl -X POST "$BASE/api/db/query" \
 
 ---
 
-### 10. 消息推送回调
+### 10. 消息推送回调 ok
 
 **`GET /api/push/config`**：查询配置  
 **`POST /api/push/config`**：设置配置

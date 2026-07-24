@@ -72,14 +72,16 @@ function buildChatMessage(param2: NativePointer): Message {
         }
     }
 
-    if (msgType === 3) {
-        const thumb = getStringByStrAddr(param2.add(0x280))
-        const extra = getStringByStrAddr(param2.add(0x2A0))
-        text = JSON.stringify([thumb, thumb, extra, extra])
-        try {
-            filename = JSON.parse(text)[0] || ''
-        } catch (e) {
-            filename = ''
+    let mediaThumb = ''
+    let mediaExtra = ''
+    if (msgType === 3 || msgType === 43 || msgType === 62) {
+        mediaThumb = getStringByStrAddr(param2.add(0x280)) || ''
+        mediaExtra = getStringByStrAddr(param2.add(0x2A0)) || ''
+        if (msgType === 3) {
+            text = JSON.stringify([mediaThumb, mediaThumb, mediaExtra, mediaExtra])
+            filename = mediaThumb || mediaExtra
+        } else {
+            filename = mediaThumb || mediaExtra
         }
     }
 
@@ -94,6 +96,8 @@ function buildChatMessage(param2: NativePointer): Message {
         mentionIds: [],
         listenerId,
         isSelf,
+        mediaThumb: mediaThumb || undefined,
+        mediaExtra: mediaExtra || undefined,
     }
 }
 

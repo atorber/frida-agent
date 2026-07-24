@@ -11,7 +11,8 @@
     "start": "npm run start:wx391027",
     "watch:wx391027": "frida-compile wx391027/index.ts -o ../dist/agent/wx391027/index.js -w",
     "build:wx391027": "frida-compile wx391027/index.ts -o ../dist/agent/wx391027/index.js",
-    "start:wx391027": "frida -l ../dist/agent/wx391027/index.js WeChat.exe",
+    "start:wx391027": "node wx391027/tools/start.js",
+    "start:wx391027:repl": "frida -l ../dist/agent/wx391027/index.js WeChat.exe",
     "lint": "eslint . --ext .ts,.js,.jsx,.tsx ",
     "lint:fix": "eslint . --ext .ts,.js,.jsx,.tsx --fix"
   },

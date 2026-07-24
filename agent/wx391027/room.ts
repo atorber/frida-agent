@@ -18,7 +18,9 @@ import {
     initmsgStruct,
     parseContact,
     createWxString,
+    createWxStringChars,
     createWxStringVector,
+    createMsvcWStringVector,
 } from './utils.js'
 
 import {
@@ -27,11 +29,419 @@ import {
 } from './types.js'
 
 import { offsets } from './offset.js'
+import { execDbQuery } from './sqlite.js'
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 
 function splitWxids(wxids: string): string[] {
     return wxids.split(',').map(s => s.trim()).filter(Boolean)
+}
+
+function sqlEscape(s: string): string {
+    return s.replace(/'/g, "''")
+}
+
+function rowText(row: { [key: string]: Uint8Array | string }, key: string): string {
+    const v = row[key]
+    if (v == null) return ''
+    if (typeof v === 'string') return v
+    try {
+        return uint8ArrayToString(v)
+    } catch (e) {
+        return ''
+    }
+}
+
+/**
+ * 将 Alias / 输入 ID 解析为 Contact.UserName（踢人必须用 UserName）
+ */
+export function resolveContactUserName(id: string): string {
+    const q = sqlEscape(id)
+    // 1) 已是 UserName
+    let rows = execDbQuery(
+        'MicroMsg.db',
+        `SELECT UserName, Alias, NickName FROM Contact WHERE UserName='${q}' LIMIT 1;`
+    )
+    if (rows.length > 0) {
+        const userName = rowText(rows[0], 'UserName')
+        if (userName) {
+            return userName
+        }
+    }
+    // 2) Alias（微信号）
+    rows = execDbQuery(
+        'MicroMsg.db',
+        `SELECT UserName, Alias FROM Contact WHERE Alias='${q}' LIMIT 1;`
+    )
+    if (rows.length > 0) {
+        const userName = rowText(rows[0], 'UserName')
+        if (userName) {
+            console.log(`resolveContactUserName: Alias ${id} -> UserName ${userName}`)
+            return userName
+        }
+    }
+    // 3) Remark / NickName（兜底，可能重名）
+    rows = execDbQuery(
+        'MicroMsg.db',
+        `SELECT UserName, NickName, Remark FROM Contact WHERE Remark='${q}' OR NickName='${q}' LIMIT 2;`
+    )
+    if (rows.length === 1) {
+        const userName = rowText(rows[0], 'UserName')
+        if (userName) {
+            console.log(`resolveContactUserName: Nick/Remark ${id} -> UserName ${userName}`)
+            return userName
+        }
+    }
+    console.warn(`resolveContactUserName: 未解析到 UserName，沿用原值: ${id}`)
+    return id
+}
+
+/** 读取群成员 UserName 列表（ChatRoom.UserNameList 分隔符为 ^G 或 \\x07） */
+export function getRoomMemberUserNames(roomId: string): string[] {
+    const rows = execDbQuery(
+        'MicroMsg.db',
+        `SELECT UserNameList FROM ChatRoom WHERE ChatRoomName='${sqlEscape(roomId)}' LIMIT 1;`
+    )
+    if (rows.length === 0) {
+        return []
+    }
+    const list = rowText(rows[0], 'UserNameList')
+    if (!list) {
+        return []
+    }
+    // 微信库常见：id1^Gid2^Gid3（字面 ^G）或 id1\x07id2（ASCII BEL）
+    // 切勿只按 ^ 分割，否则后续成员会残留前缀 G（如 Gtyutluyc）
+    return list
+        .split(/\^G|\x07/)
+        .map(s => s.replace(/^[G\^;,\s]+|[;,\s]+$/g, '').trim())
+        .filter(Boolean)
+}
+
+/** 仅使用 WCF 对齐的 wx32；调用前校验字符串可读 */
+function buildMembersVector(wxids: string[]): NativePointer {
+    if (wxids.length === 0) {
+        throw new Error('wxids 为空')
+    }
+    return createWxStringVector(wxids, false)
+}
+
+function readWxStringDebug(p: NativePointer): { ptr: NativePointer, size: number, cap: number, str: string } {
+    const dataPtr = p.readPointer()
+    const size = p.add(8).readU32()
+    const cap = p.add(12).readU32()
+    let str = ''
+    try {
+        const n = size > 0 && size < 4096 ? size : -1
+        str = (n > 0 ? dataPtr.readUtf16String(n) : dataPtr.readUtf16String()) || ''
+    } catch (e) {
+        str = '<unreadable>'
+    }
+    return { ptr: dataPtr, size, cap, str }
+}
+
+function prepareRoomMemberArgs(
+    roomId: string,
+    wxids: string[],
+    memberLayout: 'wx' | 'wstr' = 'wx',
+): {
+    roomIdStr: NativePointer
+    vMembers: NativePointer
+} {
+    const roomIdStr = createWxStringChars(roomId)
+    const vMembers = memberLayout === 'wstr'
+        ? createMsvcWStringVector(wxids)
+        : buildMembersVector(wxids)
+    const start = vMembers.readPointer()
+    const roomDbg = readWxStringDebug(roomIdStr)
+
+    let memStr = ''
+    let memPtr: NativePointer = ptr(0)
+    let memSize = 0
+    try {
+        memPtr = start.readPointer()
+        if (memberLayout === 'wstr') {
+            memSize = start.add(16).readU32()
+            memStr = memPtr.readUtf16String(memSize) || ''
+        } else {
+            const memDbg = readWxStringDebug(start)
+            memPtr = memDbg.ptr
+            memSize = memDbg.size
+            memStr = memDbg.str
+        }
+    } catch (e) {
+        memStr = '<unreadable>'
+    }
+
+    console.log(`roomMemberArgs layout=${memberLayout} room: ptr=${roomDbg.ptr} size=${roomDbg.size} str="${roomDbg.str}"`)
+    console.log(`roomMemberArgs layout=${memberLayout} member0: ptr=${memPtr} size=${memSize} str="${memStr}"`)
+
+    if (roomDbg.str !== roomId) {
+        throw new Error(`room WxString 校验失败: expect="${roomId}" got="${roomDbg.str}"`)
+    }
+    if (memStr !== wxids[0]) {
+        throw new Error(`member 字符串校验失败: expect="${wxids[0]}" got="${memStr}"`)
+    }
+    if (roomDbg.ptr.equals(memPtr)) {
+        throw new Error('room/member 共用了同一个数据指针，字符串构造异常')
+    }
+    return { roomIdStr, vMembers }
+}
+
+function normalizeNativeStatus(ret: number): number {
+    // x64 下 bool/小整数常只保证 AL 有效，高位可能是脏数据
+    return ret & 0xff
+}
+
+function callDelMembers(roomId: string, wxids: string[]): number {
+    const GetChatRoomMgr = new NativeFunction(
+        moduleBaseAddress.add(offsets.kChatRoomMgr),
+        'pointer',
+        []
+    )
+    const DelChatroomMember = new NativeFunction(
+        moduleBaseAddress.add(offsets.kDelChatroomMember),
+        'int',
+        ['pointer', 'pointer', 'pointer']
+    )
+
+    const mgrPtr = GetChatRoomMgr()
+    if (!mgrPtr || mgrPtr.isNull()) {
+        throw new Error('GetChatRoomMgr 返回空指针')
+    }
+
+    const { roomIdStr, vMembers } = prepareRoomMemberArgs(roomId, wxids, 'wx')
+    console.log(`roomDel mgr=${mgrPtr} members=${vMembers}`)
+    const raw = DelChatroomMember(mgrPtr, vMembers, roomIdStr) as number
+    const status = normalizeNativeStatus(raw)
+    console.log(`roomDel native raw=${raw} status=${status}`)
+    return status
+}
+
+function dumpNativePrologue(label: string, addr: NativePointer, count = 24) {
+    try {
+        let p = addr
+        const lines: string[] = []
+        for (let i = 0; i < count; i++) {
+            const insn = Instruction.parse(p)
+            lines.push(`${p}: ${insn}`)
+            p = insn.next
+        }
+        console.log(`${label} disasm(${count}):\n  ${lines.join('\n  ')}`)
+    } catch (e) {
+        console.log(`${label} disasm failed:`, e)
+    }
+}
+
+let addCallHookInstalled = false
+let addCallFromUs = false
+let inviteCallFromUs = false
+
+function describeMemberVec(tag: string, vec: NativePointer) {
+    if (!vec || vec.isNull()) {
+        return
+    }
+    try {
+        const start = vec.readPointer()
+        const finish = vec.add(Process.pointerSize).readPointer()
+        const bytes = finish.sub(start).toInt32()
+        console.log(`${tag} vector start=${start} finish=${finish} bytes=${bytes}`)
+        if (bytes >= 0x10 && bytes <= 0x2000) {
+            try {
+                const wx = readWxStringDebug(start)
+                console.log(`${tag} member0 size=${wx.size} str="${wx.str}"`)
+            } catch (e) {}
+            const head = start.readByteArray(Math.min(bytes, 0x40))
+            if (head) {
+                const arr = Array.from(new Uint8Array(head))
+                console.log(`${tag} memberHex=${arr.map(b => b.toString(16).padStart(2, '0')).join(' ')}`)
+            }
+        }
+    } catch (e) {
+        console.log(`${tag} vector describe failed:`, e)
+    }
+}
+
+/** 拦截 Add/Invite/Del：确认微信 UI 实际走哪条原生路径 */
+export function installAddMemberHook(): void {
+    if (addCallHookInstalled) {
+        return
+    }
+    addCallHookInstalled = true
+
+    Interceptor.attach(moduleBaseAddress.add(offsets.kAddChatroomMember), {
+        onEnter(args) {
+            const tag = addCallFromUs ? 'Add[api]' : 'Add[ui]'
+            console.log(`${tag} mgr=${args[0]} vec=${args[1]} room=${args[2]} temp=${args[3]}`)
+            try {
+                console.log(`${tag} mgr+0x151=${args[0].add(0x151).readU8()}`)
+            } catch (e) {}
+            describeMemberVec(tag, args[1])
+            try {
+                const rd = readWxStringDebug(args[2])
+                console.log(`${tag} room size=${rd.size} str="${rd.str}"`)
+            } catch (e) {}
+        },
+        onLeave(retval) {
+            const tag = addCallFromUs ? 'Add[api]' : 'Add[ui]'
+            console.log(`${tag} retval low8=${retval.toInt32() & 0xff}`)
+        },
+    })
+
+    Interceptor.attach(moduleBaseAddress.add(offsets.kInviteChatroomMember), {
+        onEnter(args) {
+            const tag = inviteCallFromUs ? 'Invite[api]' : 'Invite[ui]'
+            console.log(`${tag} a0=${args[0]} vec=${args[1]} room=${args[2]} temp=${args[3]}`)
+            try {
+                console.log(`${tag} a0 wchar=${args[0].readUtf16String()}`)
+            } catch (e) {}
+            describeMemberVec(tag, args[1])
+        },
+        onLeave(retval) {
+            const tag = inviteCallFromUs ? 'Invite[api]' : 'Invite[ui]'
+            console.log(`${tag} retval low8=${retval.toInt32() & 0xff}`)
+        },
+    })
+
+    Interceptor.attach(moduleBaseAddress.add(offsets.kDelChatroomMember), {
+        onEnter(args) {
+            console.log(`Del[native] mgr=${args[0]} vec=${args[1]} room=${args[2]}`)
+            describeMemberVec('Del[native]', args[1])
+        },
+        onLeave(retval) {
+            console.log(`Del[native] retval low8=${retval.toInt32() & 0xff}`)
+        },
+    })
+
+    console.log('已安装 Add/Invite/Del 钩子：UI 手动踢人/拉人时看 Add[ui] 还是 Invite[ui]')
+}
+
+function heapAlloc(size: number): NativePointer {
+    const GetProcessHeap = new NativeFunction(
+        Module.getExportByName('kernel32.dll', 'GetProcessHeap'),
+        'pointer',
+        []
+    )
+    const HeapAlloc = new NativeFunction(
+        Module.getExportByName('kernel32.dll', 'HeapAlloc'),
+        'pointer',
+        ['pointer', 'uint32', 'ulong']
+    )
+    const HEAP_ZERO_MEMORY = 0x8
+    const p = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size)
+    if (!p || p.isNull()) {
+        throw new Error(`HeapAlloc(${size}) failed`)
+    }
+    return p
+}
+
+/** 完全对齐 WCF NewWxStringFromWstr：ProcessHeap + 字符长度 */
+function createWxStringHeap(str: string): NativePointer {
+    const dataPtr = heapAlloc((str.length + 1) * 2)
+    dataPtr.writeUtf16String(str)
+    const structPtr = heapAlloc(0x20)
+    structPtr.writePointer(dataPtr)
+    structPtr.add(8).writeU32(str.length)
+    structPtr.add(12).writeU32(str.length)
+    return structPtr
+}
+
+function createWxStringVectorHeap(ids: string[]): NativePointer {
+    const count = ids.length
+    const arrayPtr = heapAlloc(0x20 * count)
+    for (let i = 0; i < count; i++) {
+        const dataPtr = heapAlloc((ids[i].length + 1) * 2)
+        dataPtr.writeUtf16String(ids[i])
+        const slot = arrayPtr.add(i * 0x20)
+        slot.writePointer(dataPtr)
+        slot.add(8).writeU32(ids[i].length)
+        slot.add(12).writeU32(ids[i].length)
+    }
+    const rawVector = heapAlloc(Process.pointerSize * 3)
+    const finish = arrayPtr.add(0x20 * count)
+    rawVector.writePointer(arrayPtr)
+    rawVector.add(Process.pointerSize).writePointer(finish)
+    rawVector.add(Process.pointerSize * 2).writePointer(finish)
+    return rawVector
+}
+
+function callAddMembers(roomId: string, wxids: string[]): number {
+    installAddMemberHook()
+    const addAddr = moduleBaseAddress.add(offsets.kAddChatroomMember)
+
+    const GetChatRoomMgr = new NativeFunction(
+        moduleBaseAddress.add(offsets.kChatRoomMgr),
+        'pointer',
+        []
+    )
+    const AddChatroomMember = new NativeFunction(
+        addAddr,
+        'int',
+        ['pointer', 'pointer', 'pointer', 'pointer']
+    )
+
+    const mgrPtr = GetChatRoomMgr()
+    if (!mgrPtr || mgrPtr.isNull()) {
+        throw new Error('GetChatRoomMgr 返回空指针')
+    }
+
+    // 反汇编：cmp byte ptr [rcx+0x151], 0 / je fail —— 该标志为 0 时 Add 直接失败
+    const flagAddr = mgrPtr.add(0x151)
+    const flagBefore = flagAddr.readU8()
+    console.log(`roomAdd mgr=${mgrPtr} flag@+0x151=${flagBefore}`)
+    if (flagBefore === 0) {
+        console.warn('mgr+0x151=0，Add 会走失败分支；临时置 1 后重试')
+        flagAddr.writeU8(1)
+        console.log(`roomAdd flag@+0x151 已改为 ${flagAddr.readU8()}`)
+    }
+
+    const room = createWxStringHeap(roomId)
+    const members = createWxStringVectorHeap(wxids)
+    const temp = heapAlloc(Process.pointerSize * 2)
+    const roomDbg = readWxStringDebug(room)
+    const memDbg = readWxStringDebug(members.readPointer())
+    console.log(`roomAdd heap-wx room="${roomDbg.str}" member0="${memDbg.str}"`)
+
+    addCallFromUs = true
+    let raw = 0
+    try {
+        raw = AddChatroomMember(mgrPtr, members, room, temp) as number
+    } finally {
+        addCallFromUs = false
+        // 恢复标志，避免影响微信其它逻辑
+        if (flagBefore === 0) {
+            try {
+                flagAddr.writeU8(0)
+            } catch (e) {}
+        }
+    }
+    const status = normalizeNativeStatus(raw)
+    console.log(`roomAdd heap-wx raw=${raw} status=${status}`)
+    return status
+}
+
+function callInviteMembers(roomId: string, wxids: string[]): number {
+    const InviteChatroomMember = new NativeFunction(
+        moduleBaseAddress.add(offsets.kInviteChatroomMember),
+        'int',
+        ['pointer', 'pointer', 'pointer', 'pointer']
+    )
+
+    const { roomIdStr, vMembers } = prepareRoomMemberArgs(roomId, wxids, 'wx')
+    const wsRoomidCstr = Memory.allocUtf16String(roomId)
+    const temp = Memory.alloc(Process.pointerSize * 2)
+    console.log(`roomInvite members=${vMembers}`)
+    inviteCallFromUs = true
+    let raw = 0
+    try {
+        raw = InviteChatroomMember(wsRoomidCstr, vMembers, roomIdStr, temp) as number
+    } finally {
+        inviteCallFromUs = false
+    }
+    const status = normalizeNativeStatus(raw)
+    console.log(
+        `roomInvite native raw=${raw} status=${status} temp=[${temp.readU64()}, ${temp.add(8).readU64()}]`
+    )
+    return status
 }
 
 /*
@@ -159,6 +569,7 @@ export function roomRawPayload(roomId: string) {
 
 /*
 从群里删除成员（对齐 WCF DelChatroomMember，支持逗号分隔多人）
+会先把 Alias/昵称解析为 Contact.UserName。
 */
 export function roomDel(
     roomId: string,
@@ -166,28 +577,27 @@ export function roomDel(
 ): boolean {
     console.log('roomDel:', roomId, contactId)
     try {
-        if (!roomId || !contactId) {
+        const inputWxids = splitWxids(contactId)
+        if (!roomId || inputWxids.length === 0) {
+            console.error('roomId 或 wxids 为空')
             return false
         }
 
-        const GetChatRoomMgr = new NativeFunction(
-            moduleBaseAddress.add(offsets.kChatRoomMgr),
-            'pointer',
-            []
-        )
-        const DelChatroomMember = new NativeFunction(
-            moduleBaseAddress.add(offsets.kDelChatroomMember),
-            'int',
-            ['pointer', 'pointer', 'pointer']
-        )
+        const resolvedWxids = inputWxids.map(resolveContactUserName)
+        const members = getRoomMemberUserNames(roomId)
+        console.log(`roomDel 群成员数=${members.length}, 解析结果:`, inputWxids.map((a, i) => `${a}=>${resolvedWxids[i]}`))
 
-        const roomIdStr = createWxString(roomId)
-        const vMembers = createWxStringVector(splitWxids(contactId))
-        const mgrPtr = GetChatRoomMgr()
-        const status = DelChatroomMember(mgrPtr, vMembers, roomIdStr)
-        console.log('从群删除成员结果:', status)
+        const notInRoom = members.length > 0
+            ? resolvedWxids.filter(id => !members.includes(id))
+            : []
+        if (notInRoom.length > 0) {
+            console.warn('roomDel 以下 ID 不在 ChatRoom.UserNameList 中（仍会调用原生）:', notInRoom)
+        }
+
+        const status = callDelMembers(roomId, resolvedWxids)
+        console.log('从群删除成员结果:', status, 'toKick=', resolvedWxids)
         return status === 1
-    } catch (error) {
+    } catch (error: any) {
         console.error('roomDel failed:', error)
         return false
     }
@@ -204,46 +614,32 @@ export async function roomAvatar(roomId: string) {
 }
 
 /*
-添加成员到群（对齐 WCF AddChatroomMember，支持逗号分隔多人）
+添加成员到群：先走原生 Add，失败再回退 Invite。
 */
 export function roomAdd(
     roomId: string,
     wxids: string,
 ): boolean {
+    console.log('roomAdd:', roomId, wxids)
     try {
-        if (!roomId || !wxids) {
-            console.error("房间ID或微信ID为空");
-            return false;
+        const inputWxids = splitWxids(wxids)
+        if (!roomId || inputWxids.length === 0) {
+            console.error('房间ID或微信ID为空')
+            return false
         }
-
-        const GetChatRoomMgr = new NativeFunction(
-            moduleBaseAddress.add(offsets.kChatRoomMgr),
-            'pointer',
-            []
-        )
-        const AddChatroomMember = new NativeFunction(
-            moduleBaseAddress.add(offsets.kAddChatroomMember),
-            'int',
-            ['pointer', 'pointer', 'pointer', 'pointer']
-        )
-
-        const mgrPtr = GetChatRoomMgr();
-        if (!mgrPtr || mgrPtr.isNull()) {
-            console.error('获取聊天室管理器失败');
-            return false;
+        const resolvedWxids = inputWxids.map(resolveContactUserName)
+        const addStatus = callAddMembers(roomId, resolvedWxids)
+        if (addStatus === 1) {
+            console.log('添加成员到群成功(Add):', resolvedWxids)
+            return true
         }
-
-        const roomIdStr = createWxString(roomId)
-        const vMembers = createWxStringVector(splitWxids(wxids))
-        const temp = Memory.alloc(Process.pointerSize * 2)
-        temp.writeByteArray(Array(Process.pointerSize * 2).fill(0))
-
-        const status = AddChatroomMember(mgrPtr, vMembers, roomIdStr, temp)
-        console.log('添加成员到群结果:', status)
-        return status === 1
+        console.warn(`原生 Add 返回 ${addStatus}，回退 Invite`)
+        const invStatus = callInviteMembers(roomId, resolvedWxids)
+        console.log('添加成员到群结果(Invite):', invStatus, 'wxids=', resolvedWxids)
+        return invStatus === 1
     } catch (error) {
-        console.error('添加成员到群出错:', error);
-        return false;
+        console.error('添加成员到群出错:', error)
+        return false
     }
 }
 
@@ -254,31 +650,20 @@ export function roomInvite(
     roomId: string,
     wxids: string,
 ): boolean {
+    console.log('roomInvite:', roomId, wxids)
     try {
-        if (!roomId || !wxids) {
-            console.error("房间ID或微信ID为空");
-            return false;
+        const inputWxids = splitWxids(wxids)
+        if (!roomId || inputWxids.length === 0) {
+            console.error('房间ID或微信ID为空')
+            return false
         }
-
-        const InviteChatroomMember = new NativeFunction(
-            moduleBaseAddress.add(offsets.kInviteChatroomMember),
-            'int',
-            ['pointer', 'pointer', 'pointer', 'pointer']
-        )
-
-        // WCF: InviteMembers(wsRoomid.c_str(), pMembers, pWxRoomid, temp)
-        const wsRoomidCstr = Memory.allocUtf16String(roomId)
-        const pWxRoomid = createWxString(roomId)
-        const vMembers = createWxStringVector(splitWxids(wxids))
-        const temp = Memory.alloc(Process.pointerSize * 2)
-        temp.writeByteArray(Array(Process.pointerSize * 2).fill(0))
-
-        const status = InviteChatroomMember(wsRoomidCstr, vMembers, pWxRoomid, temp)
-        console.log('邀请成员进群结果:', status)
+        const resolvedWxids = inputWxids.map(resolveContactUserName)
+        const status = callInviteMembers(roomId, resolvedWxids)
+        console.log('邀请成员进群结果:', status, 'wxids=', resolvedWxids)
         return status === 1
     } catch (error) {
-        console.error('邀请成员进群出错:', error);
-        return false;
+        console.error('邀请成员进群出错:', error)
+        return false
     }
 }
 
@@ -295,8 +680,8 @@ export function roomTopic(roomId: string, topic: string): number {
         )
 
         const instancePtr = Instance()
-        const roomIdStrPtr = createWxString(roomId)
-        const topicStrPtr = createWxString(topic)
+        const roomIdStrPtr = createWxStringChars(roomId)
+        const topicStrPtr = createWxStringChars(topic)
         const result = ModChatRoomTopic(instancePtr, roomIdStrPtr, topicStrPtr)
         console.log('ModChatRoomTopic result:', result)
         return Number(result)
@@ -355,30 +740,128 @@ export async function roomQRCode(roomId: string): Promise<string> {
     return roomId + ' mock qrcode';
 }
 
-/*
-获取群成员列表
-*/
-export async function roomMemberList(roomId: string) {
-    console.log('获取群成员列表, roomId:', roomId);
-    // 实现获取群成员列表的功能
-    // 这里可能需要获取群详情，然后解析成员信息
-    
-    // 先获取群详情
-    const roomInfo = roomRawPayload(roomId);
-    // 从群详情中解析成员列表
-    // 暂时返回空数组
-    return [];
+function normalizeRoomId(roomId: string): string {
+    const s = (roomId || '').trim()
+    if (!s) return s
+    if (s.includes('@chatroom')) return s
+    return `${s}@chatroom`
+}
+
+/** ChatRoom.DisplayNameList 与 UserNameList 一一对应（群内昵称） */
+function getRoomMemberDisplayNames(roomId: string): string[] {
+    try {
+        const rows = execDbQuery(
+            'MicroMsg.db',
+            `SELECT DisplayNameList FROM ChatRoom WHERE ChatRoomName='${sqlEscape(roomId)}' LIMIT 1;`
+        )
+        if (rows.length === 0) {
+            return []
+        }
+        const list = rowText(rows[0], 'DisplayNameList')
+        if (!list) {
+            return []
+        }
+        return list
+            .split(/\^G|\x07/)
+            .map(s => s.replace(/^[G\^;,\s]+|[;,\s]+$/g, '').trim())
+    } catch (e) {
+        return []
+    }
+}
+
+function lookupContactBrief(wxid: string): {
+    alias: string
+    name: string
+    remark: string
+    bigHeadImgUrl: string
+    smallHeadImgUrl: string
+} {
+    const empty = { alias: '', name: '', remark: '', bigHeadImgUrl: '', smallHeadImgUrl: '' }
+    try {
+        const rows = execDbQuery(
+            'MicroMsg.db',
+            `SELECT UserName, Alias, NickName, Remark, BigHeadImgUrl, SmallHeadImgUrl ` +
+            `FROM Contact WHERE UserName='${sqlEscape(wxid)}' LIMIT 1;`
+        )
+        if (rows.length === 0) {
+            return empty
+        }
+        const r = rows[0]
+        return {
+            alias: rowText(r, 'Alias'),
+            name: rowText(r, 'NickName'),
+            remark: rowText(r, 'Remark'),
+            bigHeadImgUrl: rowText(r, 'BigHeadImgUrl'),
+            smallHeadImgUrl: rowText(r, 'SmallHeadImgUrl'),
+        }
+    } catch (e) {
+        return empty
+    }
 }
 
 /*
-获取群成员详情
+获取群成员列表（MicroMsg.db ChatRoom.UserNameList + Contact 补充信息）
 */
-export async function roomMemberRawPayload(roomId: string, contactId: string) {
-    console.log('获取群成员详情, roomId:', roomId, 'contactId:', contactId);
-    // 实现获取群成员详情的功能
-    
-    // 暂时返回空对象
-    return {};
+export function roomMemberList(roomId: string): Array<{
+    wxid: string
+    alias: string
+    name: string
+    remark: string
+    displayName: string
+    bigHeadImgUrl: string
+    smallHeadImgUrl: string
+}> {
+    const rid = normalizeRoomId(roomId)
+    console.log('roomMemberList:', rid)
+
+    const wxids = getRoomMemberUserNames(rid)
+    const displayNames = getRoomMemberDisplayNames(rid)
+
+    return wxids.map((wxid, i) => {
+        const contact = lookupContactBrief(wxid)
+        return {
+            wxid,
+            alias: contact.alias,
+            name: contact.name,
+            remark: contact.remark,
+            displayName: displayNames[i] || '',
+            bigHeadImgUrl: contact.bigHeadImgUrl,
+            smallHeadImgUrl: contact.smallHeadImgUrl,
+        }
+    })
+}
+
+/*
+获取单个群成员详情
+*/
+export function roomMemberRawPayload(roomId: string, contactId: string): {
+    roomId: string
+    wxid: string
+    alias: string
+    name: string
+    remark: string
+    displayName: string
+    bigHeadImgUrl: string
+    smallHeadImgUrl: string
+    inRoom: boolean
+} {
+    const rid = normalizeRoomId(roomId)
+    const wxid = resolveContactUserName(contactId)
+    const members = getRoomMemberUserNames(rid)
+    const idx = members.indexOf(wxid)
+    const displayNames = getRoomMemberDisplayNames(rid)
+    const contact = lookupContactBrief(wxid)
+    return {
+        roomId: rid,
+        wxid,
+        alias: contact.alias,
+        name: contact.name,
+        remark: contact.remark,
+        displayName: idx >= 0 ? (displayNames[idx] || '') : '',
+        bigHeadImgUrl: contact.bigHeadImgUrl,
+        smallHeadImgUrl: contact.smallHeadImgUrl,
+        inRoom: idx >= 0,
+    }
 }
 
 /*

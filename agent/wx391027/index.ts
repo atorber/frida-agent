@@ -34,6 +34,7 @@ import {
     parseAppMsg,
     getFileNameFromAppMsg,
 } from './appMsgParser.js'
+import { startHttpServer as startRawHttpServer } from './httpServer.js'
 
 import {
     checkLogin,
@@ -50,10 +51,13 @@ import {
 import {
     roomList,
     roomRawPayload,
+    roomMemberList,
+    roomMemberRawPayload,
     roomAdd,
     roomInvite,
     roomDel,
     roomTopic,
+    installAddMemberHook,
 } from './room.js'
 
 import {
@@ -64,6 +68,7 @@ import {
     messageForward,
     messageSendRichText,
     messageSendEmotion,
+    installEmotionHook,
     getFirstPage,
     getNextPage,
     decryptImage,
@@ -76,6 +81,7 @@ import {
     downloadFinderFeedVideo,
     buildFinderVideoSavePath,
 } from './httpDownload.js'
+import { configureMediaAuto, autoHandleMedia } from './mediaAuto.js'
 
 import {
     getDbHandles,
@@ -122,6 +128,7 @@ function initializeUserInfo() {
     try {
         homePath = getHomePath()
         log('homePath', 'homePath:', homePath)
+        configureMediaAuto({ homePath })
     } catch (e) {
         console.error('初始化 homePath 失败:', e)
     }
@@ -129,6 +136,7 @@ function initializeUserInfo() {
     try {
         selfInfo = getUserInfo()
         log('selfInfo', 'selfInfo:', JSON.stringify(selfInfo))
+        configureMediaAuto({ selfId: selfInfo.id || selfInfo.wxid || '' })
     } catch (e) {
         console.error('初始化 selfInfo 失败:', e)
         selfInfo = {}
@@ -137,6 +145,9 @@ function initializeUserInfo() {
     try {
         wxid = getSelfWxid()
         log('wxid', 'wxid:', wxid)
+        if (wxid) {
+            configureMediaAuto({ selfId: wxid })
+        }
     } catch (e) {
         console.error('初始化 wxid 失败:', e)
         wxid = ''
@@ -149,6 +160,16 @@ setImmediate(() => {
         initializeUserInfo()
         setTimeout(() => {
             initializeMessageHook()
+            try {
+                installAddMemberHook()
+            } catch (e) {
+                console.error('安装 AddMember 钩子失败:', e)
+            }
+            try {
+                installEmotionHook()
+            } catch (e) {
+                console.error('安装 Emotion 钩子失败:', e)
+            }
         }, 1000)
     } catch (e) {
         console.error('初始化失败:', e)
@@ -162,7 +183,8 @@ function onRecvChatMessage(msg: Message) {
             const appMsg = parseAppMsg(msg.text) ?? undefined
             msg.appMsg = appMsg
             if (appMsg?.subType === 6) {
-                const filename = getFileNameFromAppMsg(msg.text, selfInfo.id) ?? ''
+                const selfWxid = wxid || selfInfo.wxid || ''
+                const filename = getFileNameFromAppMsg(msg.text, selfWxid) ?? ''
                 if (filename) {
                     msg.filename = filename
                     console.log('filename:', filename)
@@ -271,34 +293,21 @@ function sendMessagePush(msg: Message) {
 
 const handleMsg = (msg: Message) => {
     console.log('handleMsg:', JSON.stringify(msg, null, 2))
-    const id = msg.id
-    const type = msg.type
-    const isSelf = msg.isSelf
-    const timestamp = msg.timestamp
-    const roomId = msg.roomId
-    const talkerId = msg.talkerId
-    const listenerId = msg.listenerId
-    const text = msg.text
     
     // 发送消息推送
     if (pushConfig.enabled) {
         sendMessagePush(msg);
     }
-    
-    if (msg.type === 3) {
-        const filename = `C:\\GitHub\\frida-agent\\agent\\${id}.jpg`
-        // 等待5s
-        // setTimeout(() => {
-        //     const textJson = JSON.parse(text)
-        //     console.log('textJson:', textJson)
-        //     const thumb = homePath + textJson[1]
-        //     console.log('thumb:', thumb)
-        //     decryptImage(thumb, filename)
-        // }, 5000)
-        downloadAttach(Number(id), '', filename)
+
+    // 媒体附件自动下载；图片下载后自动解密
+    try {
+        autoHandleMedia(msg)
+    } catch (e) {
+        console.error('[MediaAuto] handleMsg 调用失败:', e)
     }
 
     if (msg.type === 49 && msg.appMsg?.subType === 51 && msg.appMsg.finderFeed) {
+        const id = msg.id
         const feed = msg.appMsg.finderFeed
         const media = feed.mediaList[0]
         const savePath = buildFinderVideoSavePath(id)
@@ -322,7 +331,6 @@ const handleMsg = (msg: Message) => {
                 .catch(err => console.error('视频号视频下载失败:', err.message || err))
         }
     }
- 
 }
 
 /*---------------------SQLite / Export---------------------*/
@@ -333,6 +341,8 @@ export {
     contactRawPayload,
     roomList,
     roomRawPayload,
+    roomMemberList,
+    roomMemberRawPayload,
     roomAdd,
     roomInvite,
     roomDel,
@@ -368,6 +378,8 @@ rpc.exports = {
     contactRawPayload: contactRawPayload,
     roomList: roomList,
     roomRawPayload: roomRawPayload,
+    roomMemberList: roomMemberList,
+    roomMemberRawPayload: roomMemberRawPayload,
     roomAdd: roomAdd,
     roomInvite: roomInvite,
     roomDel: roomDel,
@@ -395,10 +407,27 @@ rpc.exports = {
     getDbNames: getDbNames,
     getDbTables: getDbTables,
     execDbQuery: execDbQuery,
-    getLocalIdAndDbIdx: getLocalIdAndDbIdx
+    getLocalIdAndDbIdx: getLocalIdAndDbIdx,
+    stopHttpServer: () => {
+        if (httpServerHandle) {
+            httpServerHandle.close()
+            return true
+        }
+        return false
+    },
+    startHttpServer: () => {
+        if (httpServerHandle) {
+            httpServerHandle.start()
+            return true
+        }
+        return false
+    },
 } as any
 
 /*---------------------HTTP Server (Node.js Style)---------------------*/
+
+const HTTP_PORT = 19088;
+let httpServerHandle: import('./httpServer.js').HttpServerHandle | null = null;
 
 interface HttpResponse {
     code: number;
@@ -610,7 +639,31 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                 res.code = 0;
                 res.msg = '参数错误: 需要 roomId';
             }
-        } 
+        }
+        else if (path === '/api/room/members') {
+            const roomId = req.query.roomId;
+            if (roomId) {
+                const members = roomMemberList(roomId);
+                res.data = {
+                    roomId: roomId.includes('@chatroom') ? roomId : `${roomId}@chatroom`,
+                    count: members.length,
+                    members,
+                };
+            } else {
+                res.code = 0;
+                res.msg = '参数错误: 需要 roomId';
+            }
+        }
+        else if (path === '/api/room/member') {
+            const roomId = req.query.roomId;
+            const contactId = req.query.contactId || req.query.wxid;
+            if (roomId && contactId) {
+                res.data = roomMemberRawPayload(roomId, contactId);
+            } else {
+                res.code = 0;
+                res.msg = '参数错误: 需要 roomId 和 contactId';
+            }
+        }
         else if (path === '/api/message/text') {
             const startTime = Date.now();
             console.log(`[API] [${new Date().toISOString()}] 收到发送文本消息请求`);
@@ -761,8 +814,17 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                     res.msg = `JSON 解析失败: ${e.message || String(e)}`;
                     return res;
                 }
-                if (body.msgId && body.receiver) {
-                    res.data = messageForward(body.msgId, body.receiver);
+                if (body.msgId != null && body.receiver) {
+                    // msgId 超过 Number.MAX_SAFE_INTEGER 时必须用字符串，否则精度丢失
+                    const msgId = typeof body.msgId === 'string' ? body.msgId : String(body.msgId)
+                    const status = messageForward(msgId, body.receiver);
+                    res.data = status === 1
+                    if (status !== 1) {
+                        res.code = 0;
+                        res.msg = status === -1
+                            ? '转发失败: 未找到消息或参数错误（大 msgId 请用字符串）'
+                            : `转发失败: status=${status}`;
+                    }
                 } else {
                     res.code = 0;
                     res.msg = '参数错误: 需要 msgId 和 receiver';
@@ -804,7 +866,14 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                     return res;
                 }
                 if (body.contactId && body.path) {
-                    res.data = messageSendEmotion(body.contactId, body.path);
+                    const ok = messageSendEmotion(body.contactId, body.path);
+                    res.data = ok > 0;
+                    if (ok <= 0) {
+                        res.code = 0;
+                        res.msg = '发送表情失败';
+                    } else if (ok === 2) {
+                        res.msg = '动图过大，已按文件发送（对齐 UI）';
+                    }
                 } else {
                     res.code = 0;
                     res.msg = '参数错误: 需要 contactId 和 path';
@@ -875,7 +944,8 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                     res.code = 0;
                     res.msg = '参数错误: 需要 msgId 和 dir';
                 } else {
-                    const out = getAudio(Number(body.msgId), body.dir);
+                    // 大 msgId 必须保持字符串，Number() 会丢精度
+                    const out = getAudio(String(body.msgId), body.dir);
                     if (!out) {
                         res.code = 0;
                         res.msg = '获取语音失败';
@@ -962,6 +1032,10 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                 }
                 if (body.roomId && body.wxids) {
                     res.data = roomAdd(body.roomId, body.wxids);
+                    if (!res.data) {
+                        res.code = 0;
+                        res.msg = '添加群成员失败';
+                    }
                 } else {
                     res.code = 0;
                     res.msg = '参数错误: 需要 roomId 和 wxids（逗号分隔）';
@@ -983,6 +1057,10 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                 }
                 if (body.roomId && body.wxids) {
                     res.data = roomDel(body.roomId, body.wxids);
+                    if (!res.data) {
+                        res.code = 0;
+                        res.msg = '删除群成员失败';
+                    }
                 } else {
                     res.code = 0;
                     res.msg = '参数错误: 需要 roomId 和 wxids（逗号分隔）';
@@ -1004,6 +1082,10 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                 }
                 if (body.roomId && body.wxids) {
                     res.data = roomInvite(body.roomId, body.wxids);
+                    if (!res.data) {
+                        res.code = 0;
+                        res.msg = '邀请群成员失败';
+                    }
                 } else {
                     res.code = 0;
                     res.msg = '参数错误: 需要 roomId 和 wxids（逗号分隔）';
@@ -1174,6 +1256,8 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                     'GET /api/contact?contactId=xxx',
                     'GET /api/rooms',
                     'GET /api/room?roomId=xxx',
+                    'GET /api/room/members?roomId=xxx',
+                    'GET /api/room/member?roomId=xxx&contactId=xxx',
                     'POST /api/room/add',
                     'POST /api/room/del',
                     'POST /api/room/invite',
@@ -1197,9 +1281,49 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                     'GET /api/db/tables?dbName=xxx',
                     'POST /api/db/query',
                     'GET /api/push/config',
-                    'POST /api/push/config'
+                    'POST /api/push/config',
+                    'GET /api/server/status',
+                    'POST /api/server/stop',
+                    'POST /api/server/start'
                 ]
             };
+        }
+        else if (path === '/api/server/status') {
+            res.data = {
+                port: HTTP_PORT,
+                closed: httpServerHandle ? httpServerHandle.isClosed() : true,
+            };
+        }
+        else if (path === '/api/server/stop') {
+            if (req.method === 'POST') {
+                // 先回包，再异步关闭，保证本次响应能发出
+                setImmediate(() => {
+                    try {
+                        if (httpServerHandle) httpServerHandle.close();
+                    } catch (e) {
+                        console.error('[HTTP] stop 失败:', e);
+                    }
+                });
+                res.data = { stopped: true, port: HTTP_PORT };
+                res.msg = 'HTTP 监听即将关闭，端口释放；微信进程保留。可用 POST /api/server/start 再开';
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
+        }
+        else if (path === '/api/server/start') {
+            if (req.method === 'POST') {
+                if (httpServerHandle) {
+                    httpServerHandle.start();
+                    res.data = { started: true, port: HTTP_PORT };
+                } else {
+                    res.code = 0;
+                    res.msg = 'HTTP handle 未初始化';
+                }
+            } else {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            }
         } 
         else {
             res.code = 0;
@@ -1214,203 +1338,19 @@ function handleRequest(req: ParsedRequest): HttpResponse {
     return res;
 }
 
-// 创建 HTTP 服务器
+// 使用 Frida Socket.listen 自建 HTTP，避免 @frida/net accept 损坏后不可恢复
 console.log(`[HTTP] [${new Date().toISOString()}] 开始创建 HTTP 服务器...`);
-
-// 确保 Buffer 可用
-let Buffer: any;
-try {
-    // 尝试使用全局 Buffer（在 Frida 环境中，Buffer 可能不可用）
-    // 使用 eval 来避免 TypeScript 类型检查错误
-    Buffer = (eval('typeof Buffer !== "undefined" ? Buffer : null') as any) || null;
-    if (!Buffer) {
-        // 如果 Buffer 不可用，创建一个简单的实现
-        console.log(`[HTTP] [${new Date().toISOString()}] Buffer 不可用，使用 Uint8Array 替代`);
-    }
-} catch (e) {
-    console.log(`[HTTP] [${new Date().toISOString()}] Buffer 初始化失败，使用 Uint8Array 替代`);
-}
-
-const server = net.createServer((socket: any) => {
-    console.log(`[HTTP] [${new Date().toISOString()}] 收到新的客户端连接`);
-    let requestBuffer: any = new Uint8Array(0);
-    let expectedBodyLength = -1;
-    let headerEndIndex = -1;
-
-    socket.on('data', (data: any) => {
-        try {
-            // 将数据转换为 Uint8Array
-            let dataArray: Uint8Array;
-            if (data instanceof Uint8Array) {
-                dataArray = data;
-            } else if (Buffer && Buffer.isBuffer && Buffer.isBuffer(data)) {
-                dataArray = new Uint8Array(data);
-            } else if (data instanceof ArrayBuffer) {
-                dataArray = new Uint8Array(data);
-            } else {
-                // 尝试转换为字符串再编码
-                const str = String(data);
-                dataArray = new Uint8Array(str.length);
-                for (let i = 0; i < str.length; i++) {
-                    dataArray[i] = str.charCodeAt(i);
-                }
-            }
-            
-            // 拼接缓冲区
-            const newBuffer = new Uint8Array(requestBuffer.length + dataArray.length);
-            newBuffer.set(requestBuffer, 0);
-            newBuffer.set(dataArray, requestBuffer.length);
-            requestBuffer = newBuffer;
-        
-        } catch (e: any) {
-            console.error(`[HTTP] [${new Date().toISOString()}] 处理数据错误:`, e);
-            return;
-        }
-        
-        // 检查是否已经找到 header 结束位置
-        if (headerEndIndex < 0) {
-            // 查找 header 结束标记 \r\n\r\n (字节序列: 0x0D 0x0A 0x0D 0x0A)
-            for (let i = 0; i <= requestBuffer.length - 4; i++) {
-                if (requestBuffer[i] === 0x0D && 
-                    requestBuffer[i + 1] === 0x0A && 
-                    requestBuffer[i + 2] === 0x0D && 
-                    requestBuffer[i + 3] === 0x0A) {
-                    headerEndIndex = i;
-                    
-                    // 解析 header 获取 Content-Length
-                    const headerBytes = requestBuffer.subarray(0, i);
-                    const headerText = uint8ArrayToString(headerBytes);
-                    const contentLengthMatch = headerText.match(/content-length:\s*(\d+)/i);
-                    if (contentLengthMatch) {
-                        expectedBodyLength = parseInt(contentLengthMatch[1], 10);
-                    } else {
-                        expectedBodyLength = 0; // 没有 body
-                    }
-                    break;
-                }
-            }
-        }
-        
-        // 检查请求是否完整
-        const isComplete = headerEndIndex >= 0 && (
-            expectedBodyLength === 0 || // 没有 body
-            (requestBuffer.length >= headerEndIndex + 4 + expectedBodyLength) // body 已完整接收
-        );
-        
-        if (isComplete) {
-            try {
-                // 将 Uint8Array 转换为字符串（使用 utf-8 编码）
-                const bodyStart = headerEndIndex + 4;
-                const headerBytes = requestBuffer.subarray(0, headerEndIndex);
-                const bodyBytes = expectedBodyLength > 0 
-                    ? requestBuffer.subarray(bodyStart, bodyStart + expectedBodyLength)
-                    : new Uint8Array(0);
-                
-                const headerText = uint8ArrayToString(headerBytes);
-                const bodyText = expectedBodyLength > 0 ? uint8ArrayToString(bodyBytes) : '';
-                const requestText = headerText + '\r\n\r\n' + bodyText;
-                
-                // 调试：打印原始请求（前500字符）
-                const requestPreview = requestText.length > 500 ? requestText.substring(0, 500) + '...' : requestText;
-                console.log('[HTTP] 收到请求:\n', requestPreview);
-                
-                const req = parseHttpRequest(requestText);
-                
-                // 调试：打印解析结果
-                console.log('[HTTP] 解析结果:', {
-                    method: req.method,
-                    url: req.url,
-                    hasQuery: Object.keys(req.query).length > 0,
-                    bodyLength: req.body ? req.body.length : 0
-                });
-                
-                // 如果 URL 为空，尝试从原始请求中提取
-                if (!req.url || req.url === '') {
-                    const firstLine = requestText.split('\r\n')[0];
-                    const match = firstLine.match(/(GET|POST|PUT|DELETE|OPTIONS)\s+(\S+)/);
-                    if (match) {
-                        req.url = match[2].split('?')[0];
-                        console.log('[HTTP] 从请求行提取 URL:', req.url);
-                    }
-                }
-                
-                log('HTTP', `${req.method} ${req.url}`);
-                
-                const res = handleRequest(req);
-                sendResponse(socket, res);
-            } catch (e: any) {
-                console.error('[HTTP] 解析请求错误:', e);
-                console.error('[HTTP] 错误堆栈:', e.stack);
-                sendResponse(socket, {
-                    code: 0,
-                    data: null,
-                    msg: `解析请求失败: ${e.message || String(e)}`
-                }, 400);
-            }
-            
-            // 重置缓冲区
-            requestBuffer = new Uint8Array(0);
-            expectedBodyLength = -1;
-            headerEndIndex = -1;
-            socket.end();
-        }
-    });
-
-    socket.on('error', (err: any) => {
-        console.error('[HTTP] Socket 错误:', err);
-    });
-
-    socket.on('close', () => {
-        // 连接关闭
-    });
-});
-
-// 启动服务器（延迟启动，确保脚本完全加载）
-const HTTP_PORT = 19088;
-
-function startHttpServer() {
-    console.log(`[HTTP] [${new Date().toISOString()}] 准备启动 HTTP 服务器，端口: ${HTTP_PORT}`);
-    
-    try {
-        server.on('error', (err: any) => {
-            console.error(`[HTTP] [${new Date().toISOString()}] 服务器错误:`, err);
-            if (err.code === 'EADDRINUSE') {
-                console.error(`[HTTP] [${new Date().toISOString()}] 端口 ${HTTP_PORT} 已被占用，请检查是否有其他进程在使用该端口`);
-            }
-        });
-        
-        server.on('listening', () => {
-            console.log(`[HTTP] [${new Date().toISOString()}] 服务器正在监听端口 ${HTTP_PORT}`);
-        });
-        
-        server.listen(HTTP_PORT, '0.0.0.0', () => {
-            console.log(`[HTTP] [${new Date().toISOString()}] ✓ 服务器已成功启动，监听端口 ${HTTP_PORT}`);
-            console.log(`[HTTP] [${new Date().toISOString()}] ✓ 访问 http://localhost:${HTTP_PORT}/api/health 查看 API 列表`);
-            console.log(`[HTTP] [${new Date().toISOString()}] ✓ 服务器地址: http://0.0.0.0:${HTTP_PORT}`);
-        });
-        
-        // 添加超时检查
-        setTimeout(() => {
-            try {
-                // 检查服务器是否在监听
-                const isListening = server.listening;
-                if (!isListening) {
-                    console.error(`[HTTP] [${new Date().toISOString()}] ✗ 服务器启动超时，可能启动失败`);
-                } else {
-                    console.log(`[HTTP] [${new Date().toISOString()}] ✓ 服务器状态确认：正在运行 (listening: ${isListening})`);
-                }
-            } catch (e: any) {
-                console.error(`[HTTP] [${new Date().toISOString()}] ✗ 检查服务器状态失败:`, e);
-            }
-        }, 1000);
-    } catch (e: any) {
-        console.error(`[HTTP] [${new Date().toISOString()}] ✗ 启动服务器失败:`, e);
-        console.error(`[HTTP] [${new Date().toISOString()}] ✗ 错误堆栈:`, e.stack);
-    }
-}
-
-// 延迟启动服务器，确保脚本完全加载
 setImmediate(() => {
     console.log(`[HTTP] [${new Date().toISOString()}] 延迟启动 HTTP 服务器...`);
-    startHttpServer();
+    httpServerHandle = startRawHttpServer(HTTP_PORT, (req) => {
+        const mapped: ParsedRequest = {
+            method: req.method,
+            url: req.url,
+            headers: req.headers,
+            body: req.body,
+            query: req.query,
+        };
+        log('HTTP', `${mapped.method} ${mapped.url}`);
+        return handleRequest(mapped);
+    });
 });

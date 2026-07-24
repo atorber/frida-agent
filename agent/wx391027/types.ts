@@ -74,4 +74,8 @@ export interface Message {
     mentionIds: string[]; // @提到的人的ID列表，可以为空列表
     isSelf: boolean;      // 是否是自己发送的消息
     appMsg?: ParsedAppMsg; // type=49 时解析后的应用消息
+    /** 媒体缩略图路径（图片/视频，可能相对 WeChat Files） */
+    mediaThumb?: string;
+    /** 媒体原图/附件路径 */
+    mediaExtra?: string;
 }

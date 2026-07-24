@@ -55,8 +55,9 @@ export const getMsgDbHandle = (msgMgrAddr: NativePointer) => {
     for (let i = 0; i < dbIndex; i++) {
         const dbAddr = pStart.add(i * 0x08).readPointer();
         if (!dbAddr.isNull()) {
-            // MSGi.db
-            const dbName = dbAddr.readUtf16String(); // 使用 readUtf16String
+            // WCF: GET_WSTRING(dbAddr) = *(wchar_t**)dbAddr
+            const dbNamePtr = dbAddr.readPointer();
+            const dbName = dbNamePtr && !dbNamePtr.isNull() ? (dbNamePtr.readUtf16String() || '') : '';
             const dbHandle = dbAddr.add(0x78).readPointer();
             if (dbName) {
                 dbMap.set(dbName, dbHandle);
@@ -64,10 +65,13 @@ export const getMsgDbHandle = (msgMgrAddr: NativePointer) => {
 
             // MediaMsgi.db
             const mmdbAddr = dbAddr.add(0x20).readPointer();
-            const mmdbName = mmdbAddr.add(0x78).readUtf16String(); // 使用 readUtf16String
-            const mmdbHandle = mmdbAddr.add(0x50).readPointer();
-            if (mmdbName) {
-                dbMap.set(mmdbName, mmdbHandle);
+            if (mmdbAddr && !mmdbAddr.isNull()) {
+                const mmdbNamePtr = mmdbAddr.add(0x78).readPointer();
+                const mmdbName = mmdbNamePtr && !mmdbNamePtr.isNull() ? (mmdbNamePtr.readUtf16String() || '') : '';
+                const mmdbHandle = mmdbAddr.add(0x50).readPointer();
+                if (mmdbName) {
+                    dbMap.set(mmdbName, mmdbHandle);
+                }
             }
         }
     }
@@ -218,12 +222,17 @@ export const execDbQuery = (db: string, sql: string): Array<{ [key: string]: Uin
             const blob = sqlite3ColumnBlob(stmt, i);
 
             let content: Uint8Array | string = '';
-            if (length > 0 && type !== SQLITE_NULL && blob) {
+            if (type !== SQLITE_NULL) {
                 if (type === SQLITE_TEXT) {
-                    // 使用 readCString 处理 UTF-8 编码
-                    content = blob.readCString() || '';
-                } else {
-                    // 其他类型保持为 Uint8Array
+                    if (length > 0 && blob) {
+                        content = blob.readCString() || '';
+                    }
+                } else if (type === SQLITE_INTEGER || type === SQLITE_FLOAT) {
+                    // SQLite 对 INTEGER/FLOAT 的 column_blob 返回十进制文本（与 WCF 一致）
+                    if (length > 0 && blob) {
+                        content = blob.readUtf8String(length) || blob.readCString() || '';
+                    }
+                } else if (length > 0 && blob) {
                     const buffer = blob.readByteArray(length);
                     if (buffer) {
                         content = new Uint8Array(buffer);
@@ -240,44 +249,78 @@ export const execDbQuery = (db: string, sql: string): Array<{ [key: string]: Uin
     return rowsObj;
 }
 
-// 获取本地ID和数据库索引
-export const getLocalIdAndDbIdx = (id: number): { localId: number, dbIdx: number } | null => {
+// 获取本地ID和数据库索引（msgId 可能超过 JS 安全整数，请传 string）
+export const getLocalIdAndDbIdx = (id: number | string): { localId: number, dbIdx: number } | null => {
+    const msgIdStr = String(id).trim()
+    if (!/^\d+$/.test(msgIdStr)) {
+        console.error('getLocalIdAndDbIdx: 无效 msgId', id)
+        return null
+    }
+
     const msgMgrAddr = moduleBaseAddress.add(OFFSET_DB_MSG_MGR).readPointer();
     const dbIndex = msgMgrAddr.add(0x68).readU32();
     const pStart = msgMgrAddr.add(0x50).readPointer();
 
     for (let i = dbIndex - 1; i >= 0; i--) {
         const dbAddr = pStart.add(i * 0x08).readPointer();
-        if (!dbAddr.isNull()) {
-            const dbName = dbAddr.readUtf8String();
-            if (dbName) {
-                dbMap.set(dbName, dbAddr.add(0x78).readPointer());
-                const sql = `SELECT localId FROM MSG WHERE MsgSvrID=${id};`;
-                const rows = execDbQuery(dbName, sql);
-
-                if (rows.length > 0) {
-                    const row = rows[0];
-                    if (row.localId) {
-                        const localId = parseInt(row.localId as string);
-                        const dbIdx = dbAddr.add(0x28).readPointer().add(0x1E8).readU32();
-                        return { localId, dbIdx };
-                    }
-                }
-            }
+        if (dbAddr.isNull()) {
+            continue
         }
+        // WCF GET_WSTRING(dbAddr) = *(wchar_t **)dbAddr
+        let dbName = ''
+        try {
+            const namePtr = dbAddr.readPointer()
+            dbName = namePtr && !namePtr.isNull() ? (namePtr.readUtf16String() || '') : ''
+        } catch (e) {
+            continue
+        }
+        if (!dbName) {
+            continue
+        }
+
+        dbMap.set(dbName, dbAddr.add(0x78).readPointer());
+        const rows = execDbQuery(dbName, `SELECT localId FROM MSG WHERE MsgSvrID=${msgIdStr};`);
+        if (rows.length === 0) {
+            continue
+        }
+
+        const raw = rows[0].localId
+        let localId = 0
+        if (typeof raw === 'number') {
+            localId = raw
+        } else if (typeof raw === 'string') {
+            // INTEGER 经 column_blob 得到十进制文本
+            localId = parseInt(raw, 10)
+        } else if (raw instanceof Uint8Array) {
+            const s = Array.from(raw).map(b => String.fromCharCode(b)).join('')
+            localId = parseInt(s, 10)
+        }
+        if (!localId) {
+            continue
+        }
+
+        // WCF: dbIdx = (*(QWORD*)(*(QWORD*)(dbAddr+0x28)+0x1E8)) >> 32
+        const dbIdx = dbAddr.add(0x28).readPointer().add(0x1E8 + 4).readU32()
+        console.log(`getLocalIdAndDbIdx: msgId=${msgIdStr} db=${dbName} localId=${localId} dbIdx=${dbIdx}`)
+        return { localId, dbIdx }
     }
 
+    console.warn(`getLocalIdAndDbIdx: 未找到消息 MsgSvrID=${msgIdStr}`)
     return null;
 }
 
 // console.log('getLocalIdAndDbIdx() res:\n', JSON.stringify(getLocalIdAndDbIdx(1234567890)))
 
 // 获取音频数据
-export function getAudioData(id: number): Uint8Array | null {
+export function getAudioData(id: number | string): Uint8Array | null {
     const msgMgrAddr = moduleBaseAddress.add(OFFSET_DB_MSG_MGR).readPointer();
     const dbIndex = msgMgrAddr.add(0x68).readU32();
+    const idStr = String(id).trim()
+    if (!/^\d+$/.test(idStr)) {
+        return null
+    }
 
-    const sql = `SELECT Buf FROM Media WHERE Reserved0=${id};`;
+    const sql = `SELECT Buf FROM Media WHERE Reserved0=${idStr};`;
     for (let i = dbIndex - 1; i >= 0; i--) {
         const dbName = `MediaMSG${i}.db`;
         const rows = execDbQuery(dbName, sql);
