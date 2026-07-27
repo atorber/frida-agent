@@ -1,6 +1,6 @@
 /**
  * 基于 Frida Socket.listen 的轻量 HTTP 服务。
- * 规避 @frida/net 在 accept 出错后不再 accept、以及同步原生调用嵌套破坏 SocketListener 的问题。
+ * 保留原始 body 字节，支持文件上传。
  */
 import { uint8ArrayToString, stringToUint8Array } from './utils.js'
 
@@ -9,7 +9,10 @@ export interface ParsedHttpRequest {
   url: string
   query: Record<string, string>
   headers: Record<string, string>
+  /** UTF-8 文本 body（JSON 等）；二进制请求可能为空或不完整，请用 bodyBytes */
   body: string
+  /** 原始 body 字节 */
+  bodyBytes: Uint8Array
 }
 
 export interface HttpJsonResponse {
@@ -20,6 +23,12 @@ export interface HttpJsonResponse {
 
 type RequestHandler = (req: ParsedHttpRequest) => HttpJsonResponse | Promise<HttpJsonResponse>
 
+const CORS_HEADERS =
+  `Access-Control-Allow-Origin: *\r\n` +
+  `Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n` +
+  `Access-Control-Allow-Headers: Content-Type, X-Filename, X-Category\r\n` +
+  `Access-Control-Max-Age: 86400\r\n`
+
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
   const out = new Uint8Array(a.length + b.length)
   out.set(a, 0)
@@ -27,10 +36,17 @@ function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
   return out
 }
 
-function parseRequest(raw: string): ParsedHttpRequest {
-  const headerEnd = raw.indexOf('\r\n\r\n')
-  const head = headerEnd >= 0 ? raw.substring(0, headerEnd) : raw
-  const body = headerEnd >= 0 ? raw.substring(headerEnd + 4) : ''
+function parseRequestFromBytes(buf: Uint8Array): ParsedHttpRequest {
+  let headerEnd = -1
+  for (let i = 0; i <= buf.length - 4; i++) {
+    if (buf[i] === 0x0d && buf[i + 1] === 0x0a && buf[i + 2] === 0x0d && buf[i + 3] === 0x0a) {
+      headerEnd = i
+      break
+    }
+  }
+  const headBytes = headerEnd >= 0 ? buf.subarray(0, headerEnd) : buf
+  const bodyBytes = headerEnd >= 0 ? buf.subarray(headerEnd + 4) : new Uint8Array(0)
+  const head = uint8ArrayToString(headBytes)
   const lines = head.split('\r\n')
   const first = lines[0] || ''
   const m = first.match(/^(GET|POST|PUT|DELETE|OPTIONS|HEAD)\s+(\S+)/i)
@@ -57,24 +73,42 @@ function parseRequest(raw: string): ParsedHttpRequest {
       headers[line.substring(0, c).trim().toLowerCase()] = line.substring(c + 1).trim()
     }
   }
-  return { method, url, query, headers, body }
+  const ct = (headers['content-type'] || '').toLowerCase()
+  let body = ''
+  // 仅对文本/JSON 解码；二进制保持 body 为空，避免破坏 UTF-8 解码
+  if (
+    bodyBytes.length > 0 &&
+    (ct.includes('application/json') ||
+      ct.includes('text/') ||
+      ct.includes('application/x-www-form-urlencoded') ||
+      ct === '')
+  ) {
+    try {
+      body = uint8ArrayToString(bodyBytes)
+    } catch {
+      body = ''
+    }
+  }
+  return { method, url, query, headers, body, bodyBytes }
 }
 
 async function readHttpRequest(conn: SocketConnection): Promise<ParsedHttpRequest | null> {
   let buf = new Uint8Array(0)
   let headerEnd = -1
   let contentLength = -1
-  const deadline = Date.now() + 30000
+  const deadline = Date.now() + 120000
+  const maxBody = 42 * 1024 * 1024
 
   while (Date.now() < deadline) {
-    const chunk = await conn.input.read(4096)
+    const chunk = await conn.input.read(65536)
     if (!chunk || chunk.byteLength === 0) {
       if (buf.length === 0) return null
       break
     }
-    const arr: Uint8Array = (chunk && (chunk as any).byteLength !== undefined)
-      ? new Uint8Array(chunk as ArrayBufferLike)
-      : new Uint8Array(0)
+    const arr: Uint8Array =
+      chunk && (chunk as any).byteLength !== undefined
+        ? new Uint8Array(chunk as ArrayBufferLike)
+        : new Uint8Array(0)
     buf = concatBytes(buf, arr)
 
     if (headerEnd < 0) {
@@ -84,6 +118,9 @@ async function readHttpRequest(conn: SocketConnection): Promise<ParsedHttpReques
           const headerText = uint8ArrayToString(buf.subarray(0, i))
           const m = headerText.match(/content-length:\s*(\d+)/i)
           contentLength = m ? parseInt(m[1], 10) : 0
+          if (contentLength > maxBody) {
+            throw new Error(`请求体过大: ${contentLength}`)
+          }
           break
         }
       }
@@ -92,14 +129,13 @@ async function readHttpRequest(conn: SocketConnection): Promise<ParsedHttpReques
     if (headerEnd >= 0) {
       const need = headerEnd + 4 + Math.max(0, contentLength)
       if (buf.length >= need) {
-        const raw = uint8ArrayToString(buf.subarray(0, need))
-        return parseRequest(raw)
+        return parseRequestFromBytes(buf.subarray(0, need))
       }
     }
   }
 
   if (buf.length > 0) {
-    return parseRequest(uint8ArrayToString(buf))
+    return parseRequestFromBytes(buf)
   }
   return null
 }
@@ -112,32 +148,35 @@ async function writeHttpResponse(conn: SocketConnection, response: HttpJsonRespo
     `Content-Type: application/json; charset=utf-8\r\n` +
     `Content-Length: ${bodyBytes.byteLength}\r\n` +
     `Connection: close\r\n` +
-    `Access-Control-Allow-Origin: *\r\n` +
-    `Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n` +
-    `Access-Control-Allow-Headers: Content-Type\r\n` +
+    CORS_HEADERS +
     `\r\n`
   const headBytes = stringToUint8Array(head)
   const all = concatBytes(headBytes, bodyBytes)
-  // Frida OutputStream.writeAll 吃 ArrayBuffer
   const ab = all.buffer.slice(all.byteOffset, all.byteOffset + all.byteLength) as ArrayBuffer
   await conn.output.writeAll(ab)
 }
 
+async function writeOptionsResponse(conn: SocketConnection) {
+  const head =
+    `HTTP/1.1 204 No Content\r\n` +
+    `Content-Length: 0\r\n` +
+    `Connection: close\r\n` +
+    CORS_HEADERS +
+    `\r\n`
+  const headBytes = stringToUint8Array(head)
+  const ab = headBytes.buffer.slice(
+    headBytes.byteOffset,
+    headBytes.byteOffset + headBytes.byteLength,
+  ) as ArrayBuffer
+  await conn.output.writeAll(ab)
+}
+
 export interface HttpServerHandle {
-  /** 优雅关闭：停止 accept 自愈，释放端口（不杀微信） */
   close: () => void
-  /** 重新开始监听（close 之后可用） */
   start: () => void
-  /** 当前是否处于主动关闭状态 */
   isClosed: () => boolean
 }
 
-/**
- * 启动可自愈的 HTTP JSON 服务。
- * - accept 成功后立即继续下一轮 accept（不把原生业务嵌进 accept 回调）
- * - accept/listen 失败会自动重启监听（端口占用会退避，避免刷屏）
- * - close() 后不再自动重启，端口释放
- */
 export function startHttpServer(port: number, handler: RequestHandler): HttpServerHandle {
   let listener: SocketListener | null = null
   let closed = false
@@ -163,13 +202,16 @@ export function startHttpServer(port: number, handler: RequestHandler): HttpServ
     const isAddrInUse = /只允许使用一次|address already in use|EADDRINUSE/i.test(reason)
     if (isAddrInUse) {
       bindFailStreak++
-      // 端口被占：退避，避免每 500ms 刷屏；超过次数后停止自愈，等待手动 /api/server/start 或 close 后重试
       if (bindFailStreak > 8) {
-        console.error(`[HTTP] [${new Date().toISOString()}] 端口 ${port} 持续占用，停止自动重启。可先释放端口再 POST /api/server/start`)
+        console.error(
+          `[HTTP] [${new Date().toISOString()}] 端口 ${port} 持续占用，停止自动重启。可先释放端口再 POST /api/server/start`,
+        )
         return
       }
       const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(bindFailStreak - 1, 4)))
-      console.error(`[HTTP] [${new Date().toISOString()}] 端口占用，${delay}ms 后重试 (${bindFailStreak}/8): ${reason}`)
+      console.error(
+        `[HTTP] [${new Date().toISOString()}] 端口占用，${delay}ms 后重试 (${bindFailStreak}/8): ${reason}`,
+      )
       restartTimer = setTimeout(() => {
         restartTimer = null
         listenAndAccept()
@@ -191,20 +233,28 @@ export function startHttpServer(port: number, handler: RequestHandler): HttpServ
       try {
         const req = await readHttpRequest(conn)
         if (!req) {
-          try { await conn.close() } catch (e) {}
+          try {
+            await conn.close()
+          } catch (e) {}
           return
         }
         console.log(`[HTTP] [${new Date().toISOString()}] ${req.method} ${req.url}`)
+        if (req.method === 'OPTIONS') {
+          await writeOptionsResponse(conn)
+          return
+        }
         const res = await new Promise<HttpJsonResponse>((resolve) => {
           setImmediate(() => {
             try {
-              Promise.resolve(handler(req)).then(resolve).catch((e: any) => {
-                resolve({
-                  code: 0,
-                  data: null,
-                  msg: `处理失败: ${e && e.message ? e.message : String(e)}`,
+              Promise.resolve(handler(req))
+                .then(resolve)
+                .catch((e: any) => {
+                  resolve({
+                    code: 0,
+                    data: null,
+                    msg: `处理失败: ${e && e.message ? e.message : String(e)}`,
+                  })
                 })
-              })
             } catch (e: any) {
               resolve({
                 code: 0,
@@ -216,16 +266,25 @@ export function startHttpServer(port: number, handler: RequestHandler): HttpServ
         })
         await writeHttpResponse(conn, res, 200)
       } catch (e: any) {
-        console.error(`[HTTP] [${new Date().toISOString()}] 连接处理错误:`, e && e.message ? e.message : e)
+        console.error(
+          `[HTTP] [${new Date().toISOString()}] 连接处理错误:`,
+          e && e.message ? e.message : e,
+        )
         try {
-          await writeHttpResponse(conn, {
-            code: 0,
-            data: null,
-            msg: `服务器错误: ${e && e.message ? e.message : String(e)}`,
-          }, 500)
+          await writeHttpResponse(
+            conn,
+            {
+              code: 0,
+              data: null,
+              msg: `服务器错误: ${e && e.message ? e.message : String(e)}`,
+            },
+            500,
+          )
         } catch (e2) {}
       } finally {
-        try { await conn.close() } catch (e) {}
+        try {
+          await conn.close()
+        } catch (e) {}
       }
     })()
   }
@@ -238,7 +297,9 @@ export function startHttpServer(port: number, handler: RequestHandler): HttpServ
       .then((conn) => {
         accepting = false
         if (closed || listener !== l) {
-          try { conn.close() } catch (e) {}
+          try {
+            conn.close()
+          } catch (e) {}
           return
         }
         setImmediate(acceptLoop)
@@ -264,7 +325,9 @@ export function startHttpServer(port: number, handler: RequestHandler): HttpServ
     })
       .then((l) => {
         if (closed) {
-          try { l.close() } catch (e) {}
+          try {
+            l.close()
+          } catch (e) {}
           return
         }
         listener = l

@@ -325,6 +325,62 @@ const cellToString = (v: Uint8Array | string | undefined): string => {
     return String(v)
 }
 
+/**
+ * 从 MicroMsg.db 批量查头像（Contact + ContactHeadImgUrl）。
+ */
+export function lookupContactAvatars(ids: string[]): Map<string, string> {
+    const map = new Map<string, string>()
+    const unique = Array.from(new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean)))
+    if (unique.length === 0) return map
+
+    if (dbMap.size === 0) {
+        try {
+            getDbHandles()
+        } catch (e) {
+            /* ignore */
+        }
+    }
+
+    const chunkSize = 200
+    for (let i = 0; i < unique.length; i += chunkSize) {
+        const chunk = unique.slice(i, i + chunkSize)
+        const inList = chunk.map((id) => `'${sqlEscape(id)}'`).join(',')
+        try {
+            const contacts = execDbQuery(
+                'MicroMsg.db',
+                `SELECT UserName, BigHeadImgUrl, SmallHeadImgUrl ` +
+                    `FROM Contact WHERE UserName IN (${inList});`,
+            )
+            for (const c of contacts) {
+                const uid = cellToString(c.UserName)
+                if (!uid) continue
+                const avatar =
+                    cellToString(c.BigHeadImgUrl) || cellToString(c.SmallHeadImgUrl) || ''
+                if (avatar) map.set(uid, avatar)
+            }
+        } catch (e) {
+            console.error('lookupContactAvatars Contact error:', e)
+        }
+        try {
+            const heads = execDbQuery(
+                'MicroMsg.db',
+                `SELECT usrName, bigHeadImgUrl, smallHeadImgUrl ` +
+                    `FROM ContactHeadImgUrl WHERE usrName IN (${inList});`,
+            )
+            for (const h of heads) {
+                const uid = cellToString(h.usrName)
+                if (!uid || map.get(uid)) continue
+                const avatar =
+                    cellToString(h.bigHeadImgUrl) || cellToString(h.smallHeadImgUrl) || ''
+                if (avatar) map.set(uid, avatar)
+            }
+        } catch (e) {
+            /* ContactHeadImgUrl 可能不存在，忽略 */
+        }
+    }
+    return map
+}
+
 export interface ChatHistoryQuery {
     /** 会话 ID：好友 wxid 或群 ID（StrTalker） */
     talker: string
@@ -457,6 +513,186 @@ export const queryChatHistory = (opts: ChatHistoryQuery): {
     const items = merged.slice(offset, offset + limit)
 
     return { talker, total, limit, offset, order, items }
+}
+
+export interface SessionListQuery {
+    /** 返回条数，默认 50，最大 200 */
+    limit?: number
+    /** 跳过条数，默认 0 */
+    offset?: number
+    /** 是否包含陌生人会话，默认 false */
+    includeStranger?: boolean
+}
+
+export interface SessionListItem {
+    id: string
+    name: string
+    avatar: string
+    kind: 'contact' | 'room'
+    unreadCount: number
+    isSend: number
+    lastMsgType: number
+    lastContent: string
+    lastTime: number
+    lastTimeText: string
+    othersAtMe: number
+    order: number
+}
+
+const formatUnixTime = (sec: number): string => {
+    const d = new Date(sec * 1000)
+    if (!Number.isFinite(d.getTime())) return ''
+    const pad = (n: number) => (n < 10 ? '0' + n : String(n))
+    return (
+        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+        `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    )
+}
+
+/**
+ * 查询会话列表（MicroMsg.db Session，按 nOrder 降序）
+ */
+export const querySessionList = (opts: SessionListQuery = {}): {
+    total: number
+    limit: number
+    offset: number
+    items: SessionListItem[]
+} => {
+    let limit = Number(opts.limit)
+    if (!Number.isFinite(limit) || limit <= 0) limit = 50
+    if (limit > 200) limit = 200
+
+    let offset = Number(opts.offset)
+    if (!Number.isFinite(offset) || offset < 0) offset = 0
+
+    const includeStranger = !!opts.includeStranger
+
+    if (dbMap.size === 0) {
+        getDbHandles()
+    }
+
+    // 多取一些再过滤陌生人，避免分页空洞
+    const fetchN = Math.min(500, offset + limit + (includeStranger ? 0 : 80))
+    const sql =
+        `SELECT strUsrName, nOrder, nUnReadCount, strNickName, nIsSend, strContent, ` +
+        `nMsgType, nTime, othersAtMe ` +
+        `FROM Session ORDER BY nOrder DESC LIMIT ${fetchN};`
+
+    let rows: Array<{ [key: string]: Uint8Array | string }> = []
+    try {
+        rows = execDbQuery('MicroMsg.db', sql)
+    } catch (e) {
+        console.error('querySessionList Session error:', e)
+        return { total: 0, limit, offset, items: [] }
+    }
+
+    const ids: string[] = []
+    const rawItems: Array<{
+        id: string
+        nick: string
+        unreadCount: number
+        isSend: number
+        lastMsgType: number
+        lastContent: string
+        lastTime: number
+        othersAtMe: number
+        order: number
+    }> = []
+
+    for (const row of rows) {
+        const id = cellToString(row.strUsrName).trim()
+        if (!id) continue
+        if (id.endsWith('@stranger') && !includeStranger) continue
+        if (/^v\d+_/i.test(id) && id.includes('@') && !includeStranger) continue
+
+        const lastTime = parseInt(cellToString(row.nTime), 10) || 0
+        const order = parseInt(cellToString(row.nOrder), 10) || 0
+        rawItems.push({
+            id,
+            nick: cellToString(row.strNickName),
+            unreadCount: parseInt(cellToString(row.nUnReadCount), 10) || 0,
+            isSend: parseInt(cellToString(row.nIsSend), 10) || 0,
+            lastMsgType: parseInt(cellToString(row.nMsgType), 10) || 0,
+            lastContent: cellToString(row.strContent),
+            lastTime,
+            othersAtMe: parseInt(cellToString(row.othersAtMe), 10) || 0,
+            order,
+        })
+        ids.push(id)
+    }
+
+    // Contact 补充备注/昵称/头像
+    const contactMap = new Map<string, { name: string; avatar: string }>()
+    if (ids.length > 0) {
+        const inList = ids.map((id) => `'${sqlEscape(id)}'`).join(',')
+        try {
+            const contacts = execDbQuery(
+                'MicroMsg.db',
+                `SELECT UserName, Remark, NickName, BigHeadImgUrl, SmallHeadImgUrl ` +
+                    `FROM Contact WHERE UserName IN (${inList});`,
+            )
+            for (const c of contacts) {
+                const uid = cellToString(c.UserName)
+                if (!uid) continue
+                const remark = cellToString(c.Remark)
+                const nick = cellToString(c.NickName)
+                const avatar =
+                    cellToString(c.BigHeadImgUrl) || cellToString(c.SmallHeadImgUrl) || ''
+                contactMap.set(uid, {
+                    name: remark || nick || '',
+                    avatar,
+                })
+            }
+        } catch (e) {
+            console.error('querySessionList Contact enrich error:', e)
+        }
+
+        // 头像表兜底
+        try {
+            const heads = execDbQuery(
+                'MicroMsg.db',
+                `SELECT usrName, bigHeadImgUrl, smallHeadImgUrl ` +
+                    `FROM ContactHeadImgUrl WHERE usrName IN (${inList});`,
+            )
+            for (const h of heads) {
+                const uid = cellToString(h.usrName)
+                if (!uid) continue
+                const avatar =
+                    cellToString(h.bigHeadImgUrl) || cellToString(h.smallHeadImgUrl) || ''
+                const prev = contactMap.get(uid)
+                if (prev) {
+                    if (!prev.avatar && avatar) prev.avatar = avatar
+                } else if (avatar) {
+                    contactMap.set(uid, { name: '', avatar })
+                }
+            }
+        } catch (e) {
+            /* ContactHeadImgUrl 可能不存在或查询失败，忽略 */
+        }
+    }
+
+    const all: SessionListItem[] = rawItems.map((r) => {
+        const extra = contactMap.get(r.id)
+        const isRoom = r.id.endsWith('@chatroom')
+        return {
+            id: r.id,
+            name: (extra && extra.name) || r.nick || r.id,
+            avatar: (extra && extra.avatar) || '',
+            kind: isRoom ? 'room' : 'contact',
+            unreadCount: r.unreadCount,
+            isSend: r.isSend,
+            lastMsgType: r.lastMsgType,
+            lastContent: r.lastContent,
+            lastTime: r.lastTime,
+            lastTimeText: formatUnixTime(r.lastTime),
+            othersAtMe: r.othersAtMe,
+            order: r.order,
+        }
+    })
+
+    const total = all.length
+    const items = all.slice(offset, offset + limit)
+    return { total, limit, offset, items }
 }
 
 // console.log('getLocalIdAndDbIdx() res:\n', JSON.stringify(getLocalIdAndDbIdx(1234567890)))

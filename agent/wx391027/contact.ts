@@ -16,7 +16,7 @@ import {
     initStruct,
     initidStruct,
     initmsgStruct,
-    parseContact
+    parseContact,
 } from './utils.js'
 
 import {
@@ -25,6 +25,7 @@ import {
 } from './types.js'
 
 import { offsets } from './offset.js'
+import { execDbQuery, lookupContactAvatars } from './sqlite.js'
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 
@@ -214,7 +215,8 @@ export const contactList = () => {
                 // console.log('start:', start)
                 const contact = parseContact(start);
                 // console.log('contact:', JSON.stringify(contact, null, 2))
-                if (contact.id && (!contact.id.endsWith('chatroom'))) {
+                // 仅返回个人好友：CONTACT 位 + VerifyFlag=0，排除公众号/陌生人等
+                if (contact.id && contact.friend) {
                     contacts.push(contact);
                 }
             } catch (error) {
@@ -223,6 +225,26 @@ export const contactList = () => {
             start = start.add(CONTACT_SIZE);
         }
     }
+    // 从 DB 补齐头像（内存结构里 URL 常为空）
+    try {
+        const avatarMap = lookupContactAvatars(contacts.map((c) => c.id))
+        for (const c of contacts) {
+            const url = avatarMap.get(c.id)
+            if (url) c.avatar = url
+        }
+    } catch (e) {
+        console.log('contactList() avatar enrich error:', e)
+    }
+    // 按名称正序（空名靠后）
+    contacts.sort((a, b) => {
+        const na = (a.name || '').trim()
+        const nb = (b.name || '').trim()
+        if (!na && !nb) return (a.id || '').localeCompare(b.id || '', 'zh-CN')
+        if (!na) return 1
+        if (!nb) return -1
+        const byName = na.localeCompare(nb, 'zh-CN')
+        return byName !== 0 ? byName : (a.id || '').localeCompare(b.id || '', 'zh-CN')
+    })
     return contacts;
 };
 
@@ -261,162 +283,116 @@ export function contactRawPayload(wxid: string) {
     var info: any = {}; // 假设这是一个对JavaScript对象的映射
     const start = contactBuf;
 
-    // 辅助函数：安全读取指针指向的字符串
-    const safeReadString = (ptr: NativePointer): string => {
+    // mmString 字段起始偏移直接用 readWideString；勿再 +0x20（会错读到下一字段）
+    const readMm = (off: number): string => {
         try {
-            if (ptr.isNull()) return '';
-            const strPtr = ptr.readPointer();
-            if (strPtr.isNull()) return '';
-            return strPtr.readUtf16String() || '';
+            return readWideString(start.add(off)) || ''
         } catch (e) {
-            return '';
+            return ''
         }
-    };
-    // mmString   UserName;			//0x10  + 0x20
-    try {
-        info.UserName = readWideString(start.add(0x10));
-        // 如果 UserName 为空，可能表示获取失败
-        if (!info.UserName || info.UserName === '') {
-            console.log(`GetContact可能失败: wxid=${wxid}, UserName为空, success=${success}`);
-            // 不立即返回，继续尝试读取其他字段
-        }
-    } catch (e) {
-        info.UserName = '';
     }
-    // mmString   Alias;				//0x30  + 0x20
-    info.Alias = safeReadString(start.add(0x30 + 0x20));
-    // mmString   EncryptUserName;		//0x50  + 0x20
-    // const EncryptUserName = start.add(0x50 + 0x20).readPointer().readUtf16String();
-    // console.log('EncryptUserName:', EncryptUserName)
-    // int32_t	   DelFlag;				//0x70  + 0x4
+    // mmString   UserName;			//0x10
+    info.UserName = readMm(0x10)
+    if (!info.UserName) {
+        console.log(`GetContact可能失败: wxid=${wxid}, UserName为空, success=${success}`);
+    }
+    // mmString   Alias;				//0x30  微信号
+    info.Alias = readMm(0x30)
+    // mmString   EncryptUserName;		//0x50
+    info.EncryptUserName = readMm(0x50)
+    // int32_t	   DelFlag;				//0x70
     info.DelFlag = start.add(0x70).readU32();
-    // int32_t    Type;				//0x74  + 0x4
-    info.Type = start.add(0x74 + 0x4).readU32();
-    // int32_t    VerifyFlag;			//0x78  + 0x4
-    // int32_t	   _0x7C;				//0x7C  + 0x4
-    // mmString   Remark;				//0x80  + 0x20
-    info.Remark = safeReadString(start.add(0x80 + 0x20));
-    // mmString   NickName;			//0xA0  + 0x20
-    try {
-        info.NickName = readWideString(start.add(0xA0));
-    } catch (e) {
-        info.NickName = '';
-    }
-    // mmString   LabelIDList;			//0xC0  + 0x20
-    info.LabelIDList = safeReadString(start.add(0xC0 + 0x20));
-    // mmString   DomainList;			//0xE0  + 0x20
-    // int64_t    ChatRoomType;		//0x100 + 0x8
-    info.ChatRoomType = safeReadString(start.add(0x100));
-    // mmString   PYInitial;			//0x108 + 0x20
-    info.PYInitial = safeReadString(start.add(0x108 + 0x20));
-    // mmString   QuanPin;				//0x128 + 0x20
-    info.QuanPin = safeReadString(start.add(0x128 + 0x20));
-    // mmString   RemarkPYInitial;		//0x148 + 0x20
-    // mmString   RemarkQuanPin;		//0x168 + 0x20
-    // mmString   BigHeadImgUrl;		//0x188 + 0x20
-    try {
-        info.BigHeadImgUrl = readWideString(start.add(0x188 + 0x20));
-    } catch (e) {
-        info.BigHeadImgUrl = '';
-    }
-    // mmString   SmallHeadImgUrl;		//0x1A8 + 0x20
-    try {
-        info.SmallHeadImgUrl = readWideString(start.add(0x1A8));
-    } catch (e) {
-        info.SmallHeadImgUrl = '';
-    }
-    // mmString   _HeadImgMd5;			//0x1C8 + 0x20 
+    // int32_t    Type;				//0x74
+    info.Type = start.add(0x74).readU32();
+    // int32_t    VerifyFlag;			//0x78
+    info.VerifyFlag = start.add(0x78).readU32();
+    // mmString   Remark;				//0x80
+    info.Remark = readMm(0x80)
+    // mmString   NickName;			//0xA0
+    info.NickName = readMm(0xA0)
+    // mmString   LabelIDList;			//0xC0
+    info.LabelIDList = readMm(0xC0)
+    // int64_t    ChatRoomType;		//0x100
+    info.ChatRoomType = start.add(0x100).readU64().toString()
+    // mmString   PYInitial;			//0x108
+    info.PYInitial = readMm(0x108)
+    // mmString   QuanPin;				//0x128
+    info.QuanPin = readMm(0x128)
+    // mmString   BigHeadImgUrl;		//0x188
+    info.BigHeadImgUrl = readMm(0x188)
+    // mmString   SmallHeadImgUrl;		//0x1A8
+    info.SmallHeadImgUrl = readMm(0x1A8)
 
     // //int64_t  ChatRoomNotify;      //0x1E8
-    info.ChatRoomNotify = safeReadString(start.add(0x1E8));
-    // char       _0x1E8[24];			//0x1E8 + 0x18
-    // mmString   ExtraBuf;			//0x200 + 0x20
-    info.ExtraBuf = safeReadString(start.add(0x200 + 0x20));
+    info.ChatRoomNotify = start.add(0x1E8).readU64().toString()
+    // mmString   ExtraBuf;			//0x200
+    info.ExtraBuf = readMm(0x200)
 
-    // int32_t    ImgFlag;			   //0x220 + 0x4
+    // int32_t    ImgFlag;			   //0x220
     info.ImgFlag = start.add(0x220).readU32();
-    // int32_t    Sex;				   //0x224 + 0x4
+    // int32_t    Sex;				   //0x224
     info.Sex = start.add(0x224).readU32();
-    // int32_t    ContactType;		   //0x228 + 0x4
+    // int32_t    ContactType;		   //0x228
     info.ContactType = start.add(0x228).readU32();
-    // int32_t   _0x22C;			   //0x22c + 0x4
 
-    // mmString  Weibo;				//0x230 + 0x20
-    // int32_t   WeiboFlag;			//0x250 + 0x4
-    // int32_t   _0x254;				//0x254 + 0x4
+    // mmString  WeiboNickname;		//0x258
+    info.WeiboNickname = readMm(0x258)
 
-    // mmString  WeiboNickname;		//0x258 + 0x20
-    try {
-        info.WeiboNickname = readWideString(start.add(0x258 + 0x20));
-    } catch (e) {
-        info.WeiboNickname = '';
-    }
+    // mmString  Country;			  //0x2A0
+    info.Country = readMm(0x2A0)
 
-    // int32_t  PersonalCard;		   //0x278 + 0x4
-    // int32_t  _0x27C;			   //0x27c + 0x4
-
-    // mmString  Signature;		  //0x280 + 0x20
-    // mmString  Country;			  //0x2A0 + 0x20
-    try {
-        info.Country = readWideString(start.add(0x2A0 + 0x20));
-    } catch (e) {
-        info.Country = '';
-    }
-
-    // std::vector<mmString>  PhoneNumberList; //0x2C0 + 0x18
-
-    // mmString  Province;				//0x2D8 + 0x20
-    info.Province = safeReadString(start.add(0x2D8 + 0x20));
-    // mmString  City;					//0x2F8 + 0x20
-    info.City = safeReadString(start.add(0x2F8 + 0x20));
-    // int32_t   Source;				//0x318 + 0x4
+    // mmString  Province;				//0x2D8
+    info.Province = readMm(0x2D8)
+    // mmString  City;					//0x2F8
+    info.City = readMm(0x2F8)
+    // int32_t   Source;				//0x318
     info.Source = start.add(0x318).readU32();
-    // int32_t   _0x31C;				//0x31C + 0x4
 
-    // mmString  VerifyInfo;			//0x320 + 0x20
-    // mmString  RemarkDesc;		   //0x340 + 0x20
-    // mmString  RemarkImgUrl;		   //0x360 + 0x20
+    // mmString  VerifyContent;      //0x398
+    info.VerifyContent = readMm(0x398)
 
-    // int32_t   BitMask;			  //0x380 + 0x4
-    // int32_t   BitVal;			  //0x384 + 0x4
-    // int32_t   AddContactScene;	  //0x388 + 0x4
-    // int32_t   HasWeiXinHdHeadImg; //0x38c + 0x4
-    // int32_t   Level;			  //0x390 + 0x4
-    // int32_t   _0x394;			  //0x394 + 0x4
+    // mmString IDCardNum;			//0x420
+    info.IDCardNum = readMm(0x420)
+    // mmString RealName;			//0x440
+    info.RealName = readMm(0x440)
 
-    // mmString  VerifyContent;      //0x398 + 0x20
-    info.VerifyContent = safeReadString(start.add(0x398 + 0x20));
-    // int32_t  AlbumStyle;	      //0x3B8 + 0x4
-    // int32_t  AlbumFlag;			  //0x3BC + 0x4
-    // mmString AlbumBGImgID;		  //0x3C0 + 0x20
+    // mmString ExtInfo;			//0x4A0
+    info.ExtInfo = readMm(0x4A0)
 
-    // int64_t  _0x3E0;			 //0x3E0 + 0x8
+    // mmString CardImgUrl;	    //0x4E0
+    info.CardImgUrl = readMm(0x4E0)
 
-    // int32_t  SnsFlag;			//0x3E8	+ 0x4
-    // int32_t  _0x3EC;			//0x3EC + 0x4
-
-    // mmString  SnsBGImgID;		//0x3F0 + 0x20
-
-    // int64_t  SnsBGObjectID;		//0x410 + 0x8
-
-    // int32_t  SnsFlagEx;			//0x418 + 0x4
-    // int32_t  _0x41C;			//0x41C + 0x4
-
-    // mmString IDCardNum;			//0x420 + 0x20
-    info.IDCardNum = safeReadString(start.add(0x420 + 0x20));
-    // mmString RealName;			//0x440 + 0x20
-    info.RealName = safeReadString(start.add(0x440 + 0x20));
-
-    // mmString MobileHash;		//0x460 + 0x20
-    // mmString MobileFullHash;    //0x480 + 0x20
-
-    // mmString ExtInfo;			//0x4A0 + 0x20
-    info.ExtInfo = safeReadString(start.add(0x4A0 + 0x20));
-    // mmString _0x4C0;		    //0x4C0 + 0x20
-
-    // mmString CardImgUrl;	    //0x4EO + 0x20
-    info.CardImgUrl = safeReadString(start.add(0x4E0 + 0x20));
-    // char _res[0x1A8];           //0x500 + 
+    // DB 兜底：微信号 / 备注 / 昵称 / 头像
+    try {
+        const esc = String(wxid).replace(/'/g, "''")
+        const rows = execDbQuery(
+            'MicroMsg.db',
+            `SELECT Alias, Remark, NickName, BigHeadImgUrl, SmallHeadImgUrl ` +
+                `FROM Contact WHERE UserName='${esc}' LIMIT 1;`,
+        )
+        if (rows && rows[0]) {
+            const row = rows[0]
+            const cell = (v: any): string => {
+                if (v === undefined || v === null) return ''
+                if (typeof v === 'string') return v
+                if (v instanceof Uint8Array) {
+                    try {
+                        return Array.from(v).map((b) => String.fromCharCode(b)).join('')
+                    } catch {
+                        return ''
+                    }
+                }
+                return String(v)
+            }
+            if (!info.Alias) info.Alias = cell(row.Alias)
+            if (!info.Remark) info.Remark = cell(row.Remark)
+            if (!info.NickName) info.NickName = cell(row.NickName)
+            if (!info.BigHeadImgUrl) info.BigHeadImgUrl = cell(row.BigHeadImgUrl)
+            if (!info.SmallHeadImgUrl) info.SmallHeadImgUrl = cell(row.SmallHeadImgUrl)
+        }
+    } catch (e) {
+        /* ignore */
+    }
 
     // console.log('contact info:', JSON.stringify(info))
 

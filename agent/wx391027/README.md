@@ -5,7 +5,7 @@
 |查询登录状态|Y|`GET /api/checkLogin`|
 |获取登录账号信息|Y|`GET /api/contacts/self`|
 |获取消息类型|Y|`GET /api/message/types`|
-|获取联系人|Y|`GET /api/contacts`、`GET /api/contact`|
+|获取联系人|Y|`GET /api/contacts`、`GET /api/contact`（列表仅个人好友：CONTACT 位且 VerifyFlag=0，排除公众号/`@stranger` 等）|
 |获取群列表|Y|`GET /api/rooms`|
 |获取群详情|Y|`GET /api/room?roomId=xxx`|
 |获取群成员|Y|`GET /api/room/members?roomId=xxx`|
@@ -13,12 +13,14 @@
 |获取数据库所有表|Y|`GET /api/db/tables?dbName=xxx`|
 |获取语音消息|Y|`POST /api/message/audio`（silk→mp3，需本机 pysilk+ffmpeg）|
 |查询聊天记录|Y|`GET\|POST /api/message/history`（按 talker 查 MSG*.db）|
+|查询会话列表|Y|`GET\|POST /api/sessions`（MicroMsg.db Session，默认排除陌生人）|
 |发送文本消息|Y|`POST /api/message/text`|
 |发送@文本消息|Y|`POST /api/message/text`，`atWxids`|
-|发送图片消息|Y|`POST /api/message/image`|
-|发送文件消息|Y|`POST /api/message/file`|
+|发送图片消息|Y|`POST /api/message/image`；控制台可先 `POST /api/upload`|
+|发送文件消息|Y|`POST /api/message/file`；控制台可先 `POST /api/upload`|
 |发送卡片消息|Y|`POST /api/message/richText`|
 |发送表情/GIF|Y|`POST /api/message/emotion`|
+|上传文件到本机|Y|`POST /api/upload`（octet-stream / multipart / base64），返回本地路径|
 |拍一拍群友|Y|`POST /api/message/pat`|
 |转发消息|Y|`POST /api/message/forward`|
 |开启/关闭接收消息|Y|`GET\|POST /api/message/listen`|
@@ -304,6 +306,29 @@ curl -X POST "$BASE/api/message/text" \
   -d "{\"contactId\":\"21341182572@chatroom\",\"text\":\"全体注意\",\"atWxids\":[\"notify@all\"]}"
 ```
 
+#### 5.1.1 上传文件到本机 ok
+
+**`POST /api/upload`**（别名 `/api/upload/image`、`/api/upload/file`）
+
+浏览器或远端先把文件落到 **Agent 所在机器**，再拿返回的 `path` 调用发图/发文件接口。默认目录：`WeChat Files\...\FridaAgent\uploads\{category}\`。
+
+支持三种方式（任选）：
+
+1. **octet-stream（推荐）**：body=文件字节；头 `X-Filename`（URL 编码）、可选 `X-Category`=`image|file|emotion`
+2. **multipart/form-data**：表单字段带 `filename`
+3. **JSON**：`{ "filename":"a.jpg", "dataBase64":"...", "category":"image" }`
+
+```bash
+# octet-stream
+curl -X POST "$BASE/api/upload" \
+  -H "Content-Type: application/octet-stream" \
+  -H "X-Filename: demo.jpg" \
+  -H "X-Category: image" \
+  --data-binary @"C:\temp\demo.jpg"
+```
+
+成功时 `data`：`{ path, filename, size, category }`。
+
 #### 5.2 发送图片 ok
 
 **`POST /api/message/image`**
@@ -485,6 +510,28 @@ curl -X POST "$BASE/api/message/history" \
 ```
 
 `data.items[]` 字段：`msgId` / `type` / `isSender` / `createTime` / `createTimeText` / `content` / `displayContent` / `dbName` 等。
+
+#### 6.4.1 查询会话列表 ok
+
+**`GET|POST /api/sessions`**（别名 `/api/chat/sessions`、`/api/message/sessions`）
+
+读取 `MicroMsg.db` 的 `Session` 表，按 `nOrder` 降序；并补充 Contact 备注/昵称/头像。默认排除 `@stranger` 等非好友会话。
+
+| 参数 | 类型 | 必填 | 说明 |
+|--|--|--|--|
+| `limit` | number | 否 | 默认 50，最大 200 |
+| `offset` | number | 否 | 默认 0 |
+| `includeStranger` | boolean | 否 | `true` 时包含陌生人会话 |
+
+```bash
+curl "$BASE/api/sessions?limit=30"
+
+curl -X POST "$BASE/api/sessions" \
+  -H "Content-Type: application/json" \
+  -d "{\"limit\":30,\"offset\":0}"
+```
+
+`data.items[]` 字段：`id` / `name` / `avatar` / `kind`（`contact`|`room`）/ `unreadCount` / `lastContent` / `lastMsgType` / `lastTime` / `lastTimeText` / `isSend` / `othersAtMe` / `order`。
 
 #### 6.5 下载视频号视频
 

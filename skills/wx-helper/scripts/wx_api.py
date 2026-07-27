@@ -180,6 +180,11 @@ def build_parser() -> argparse.ArgumentParser:
     ch.add_argument("--from-time", type=int, default=None)
     ch.add_argument("--to-time", type=int, default=None)
 
+    ss = sub.add_parser("sessions", help="GET /api/sessions 会话列表")
+    ss.add_argument("--limit", type=int, default=50)
+    ss.add_argument("--offset", type=int, default=0)
+    ss.add_argument("--include-stranger", action="store_true")
+
     da = sub.add_parser("download-attach", help="POST /api/message/downloadAttach")
     da.add_argument("--msg-id", required=True)
     da.add_argument("--thumb", default="")
@@ -319,6 +324,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.to_time is not None:
             body["toTime"] = args.to_time
         post("/api/message/history", body)
+    elif cmd == "sessions":
+        get(
+            "/api/sessions",
+            {
+                "limit": args.limit,
+                "offset": args.offset,
+                "includeStranger": "1" if args.include_stranger else None,
+            },
+        )
     elif cmd == "download-attach":
         post(
             "/api/message/downloadAttach",

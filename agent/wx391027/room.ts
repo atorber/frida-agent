@@ -29,7 +29,7 @@ import {
 } from './types.js'
 
 import { offsets } from './offset.js'
-import { execDbQuery } from './sqlite.js'
+import { execDbQuery, lookupContactAvatars } from './sqlite.js'
 
 const moduleBaseAddress = Module.getBaseAddress('WeChatWin.dll')
 
@@ -490,6 +490,15 @@ export function roomList() {
             }
             start = start.add(CONTACT_SIZE);
         }
+    }
+    try {
+        const avatarMap = lookupContactAvatars(contacts.map((c) => c.id))
+        for (const c of contacts) {
+            const url = avatarMap.get(c.id)
+            if (url) c.avatar = url
+        }
+    } catch (e) {
+        console.log('roomList() avatar enrich error:', e)
     }
     return contacts;
 };

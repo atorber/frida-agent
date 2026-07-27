@@ -930,18 +930,28 @@ export function parseContact(start: any) {
   // console.log('temp:', JSON.stringify(temp, null, 2))
 
   const info: any = {}
+  try {
+    info.BigHeadImgUrl = readWideString(start.add(0x188)) || ''
+  } catch (e) {
+    info.BigHeadImgUrl = ''
+  }
+  try {
+    info.SmallHeadImgUrl = readWideString(start.add(0x1A8)) || ''
+  } catch (e) {
+    info.SmallHeadImgUrl = ''
+  }
 
   const contact = {
       id: temp.wxid,
       gender: 1,
       type: temp.type,
-      name: temp.nickname,
-      friend: true,
+      name: (temp.remark && String(temp.remark).trim()) || temp.nickname,
+      friend: isFriendContactId(temp.wxid, temp.type, temp.verify_flag),
       star: false,
       coworker: temp.wxid.indexOf('@openim') > -1,
-      avatar: info.SmallHeadImgUrl,
+      avatar: info.SmallHeadImgUrl || info.BigHeadImgUrl || '',
       address: info.Province + info.City,
-      alias: info.Alias,
+      alias: temp.remark || info.Alias,
       city: info.City,
       province: info.Province,
       weixin: temp.custom_account,
@@ -952,4 +962,64 @@ export function parseContact(start: any) {
   };
   return contact;
 
+}
+
+/** Contact.Type：通讯录联系人标记 */
+const MM_CONTACTFLAG_CONTACT = 0x1
+
+/** 系统号 / 非个人好友（保留 filehelper） */
+const NON_FRIEND_SYSTEM_IDS = new Set([
+  'fmessage',
+  'medianote',
+  'floatbottle',
+  'weibo',
+  'mphelper',
+  'newsapp',
+  'qmessage',
+  'tmessage',
+  'officialaccounts',
+  'notification_messages',
+  'helper_entry',
+  'blogapp',
+  'facebookapp',
+  'feedsapp',
+  'qqfriend',
+  'qqmail',
+  'brandsessionholder',
+  'weixin',
+  'brandcustomer',
+])
+
+/**
+ * 是否应出现在「好友/人脉」列表中。
+ *
+ * 注意：DB/内存里好友的 EncryptUserName 也常为 `v3_…@stranger`，
+ * 不能据此判非好友。该串对应的典型非好友是公众号（如 gh_* + VerifyFlag≠0）。
+ */
+export function isFriendContactId(
+  id: string,
+  type?: number,
+  verifyFlag?: number,
+): boolean {
+  if (!id || typeof id !== 'string') return false
+  const wxid = id.trim()
+  if (!wxid) return false
+  if (wxid.endsWith('@chatroom')) return false
+  if (wxid.endsWith('@openim')) return false
+  if (wxid.includes('@im.chatroom')) return false
+  // UserName 本身是临时陌生人
+  if (wxid.endsWith('@stranger')) return false
+  if (/^v\d+_/i.test(wxid) && wxid.includes('@')) return false
+  // 公众号
+  if (wxid.startsWith('gh_')) return false
+  if (NON_FRIEND_SYSTEM_IDS.has(wxid)) return false
+  // 须带通讯录 CONTACT 位（排除仅群聊出现过的 Type=4、仅聊天 Type=2 等）
+  if (typeof type === 'number' && (type & MM_CONTACTFLAG_CONTACT) === 0) {
+    return false
+  }
+  // VerifyFlag≠0：公众号/品牌号等（EncryptUserName 常带 @stranger）
+  if (typeof verifyFlag === 'number' && verifyFlag !== 0) {
+    return false
+  }
+  return true
 }

@@ -35,6 +35,11 @@ import {
     getFileNameFromAppMsg,
 } from './appMsgParser.js'
 import { startHttpServer as startRawHttpServer } from './httpServer.js'
+import {
+    saveUploadedFile,
+    extractMultipartFile,
+    extractJsonBase64Upload,
+} from './upload.js'
 
 import {
     checkLogin,
@@ -91,6 +96,7 @@ import {
     execDbQuery,
     getLocalIdAndDbIdx,
     queryChatHistory,
+    querySessionList,
 } from './sqlite.js'
 
 import {
@@ -371,6 +377,7 @@ export {
     execDbQuery,
     getLocalIdAndDbIdx,
     queryChatHistory,
+    querySessionList,
 }
 
 rpc.exports = {
@@ -411,6 +418,7 @@ rpc.exports = {
     execDbQuery: execDbQuery,
     getLocalIdAndDbIdx: getLocalIdAndDbIdx,
     queryChatHistory: queryChatHistory,
+    querySessionList: querySessionList,
     stopHttpServer: () => {
         if (httpServerHandle) {
             httpServerHandle.close()
@@ -443,6 +451,7 @@ interface ParsedRequest {
     url: string;
     headers: { [key: string]: string };
     body: string;
+    bodyBytes?: Uint8Array;
     query: { [key: string]: string };
 }
 
@@ -1172,6 +1181,42 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                 res.msg = '方法错误: 需要使用 POST';
             }
         }
+        else if (path === '/api/sessions' || path === '/api/chat/sessions' || path === '/api/message/sessions') {
+            let limit: number | undefined
+            let offset: number | undefined
+            let includeStranger = false
+
+            if (req.method === 'POST') {
+                let body: any = {}
+                try {
+                    if (req.body) body = JSON.parse(req.body)
+                } catch (e: any) {
+                    res.code = 0
+                    res.msg = `JSON 解析失败: ${e.message || String(e)}`
+                    return res
+                }
+                if (body.limit !== undefined) limit = Number(body.limit)
+                if (body.offset !== undefined) offset = Number(body.offset)
+                if (body.includeStranger === true || body.includeStranger === 1 || body.includeStranger === '1') {
+                    includeStranger = true
+                }
+            } else if (req.method === 'GET') {
+                if (req.query.limit) limit = Number(req.query.limit)
+                if (req.query.offset) offset = Number(req.query.offset)
+                if (
+                    req.query.includeStranger === '1' ||
+                    req.query.includeStranger === 'true'
+                ) {
+                    includeStranger = true
+                }
+            } else {
+                res.code = 0
+                res.msg = '方法错误: 需要使用 GET 或 POST'
+                return res
+            }
+
+            res.data = querySessionList({ limit, offset, includeStranger })
+        }
         else if (path === '/api/message/history' || path === '/api/chat/history') {
             let talker = ''
             let limit: number | undefined
@@ -1332,6 +1377,66 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                 res.msg = '方法错误: 需要使用 POST 或 GET';
             }
         } 
+        else if (path === '/api/upload' || path === '/api/upload/image' || path === '/api/upload/file') {
+            if (req.method !== 'POST') {
+                res.code = 0;
+                res.msg = '方法错误: 需要使用 POST';
+            } else {
+                try {
+                    const ct = (req.headers['content-type'] || req.headers['Content-Type'] || '').toLowerCase();
+                    const bytes = req.bodyBytes || new Uint8Array(0);
+                    let filename = '';
+                    let data: Uint8Array | null = null;
+                    let category =
+                        req.query.category ||
+                        req.headers['x-category'] ||
+                        (path.endsWith('/image') ? 'image' : path.endsWith('/file') ? 'file' : 'file');
+
+                    if (ct.includes('multipart/form-data') && bytes.length > 0) {
+                        const part = extractMultipartFile(bytes, ct);
+                        if (part) {
+                            filename = part.filename;
+                            data = part.data;
+                        }
+                    } else if (ct.includes('application/json') || (req.body && req.body.indexOf('dataBase64') >= 0)) {
+                        const parsed = extractJsonBase64Upload(req.body || '');
+                        if (parsed) {
+                            filename = parsed.filename;
+                            data = parsed.data;
+                            if (parsed.category) category = parsed.category;
+                        }
+                    } else if (bytes.length > 0) {
+                        // application/octet-stream 或其它：整段 body 为文件内容
+                        const rawName =
+                            req.headers['x-filename'] ||
+                            req.headers['X-Filename'] ||
+                            req.query.filename ||
+                            'file.bin';
+                        try {
+                            filename = decodeURIComponent(rawName);
+                        } catch {
+                            filename = rawName;
+                        }
+                        data = bytes;
+                    }
+
+                    if (!data || data.byteLength === 0 || !filename) {
+                        res.code = 0;
+                        res.msg =
+                            '参数错误: 请用 multipart 文件、octet-stream(+X-Filename)、或 JSON {filename,dataBase64}';
+                    } else {
+                        if (!homePath) {
+                            try { homePath = getHomePath(); } catch (e) {}
+                        }
+                        res.data = saveUploadedFile(homePath, filename, data, category);
+                        res.msg = 'uploaded';
+                    }
+                } catch (e: any) {
+                    res.code = 0;
+                    res.msg = `上传失败: ${e && e.message ? e.message : String(e)}`;
+                }
+            }
+        }
         else if (path === '/api/health' || path === '/') {
             res.data = {
                 status: 'ok',
@@ -1356,10 +1461,14 @@ function handleRequest(req: ParsedRequest): HttpResponse {
                     'POST /api/message/richText',
                     'POST /api/message/pat',
                     'POST /api/message/forward',
+                    'POST /api/upload',
+                    'POST /api/upload/image',
+                    'POST /api/upload/file',
                     'POST /api/message/downloadAttach',
                     'POST /api/message/decryptImage',
                     'POST /api/message/audio',
                     'GET|POST /api/message/history',
+                    'GET|POST /api/sessions',
                     'GET /api/message/types',
                     'GET|POST /api/message/listen',
                     'POST /api/message/downloadFinderVideo',
@@ -1436,6 +1545,7 @@ setImmediate(() => {
             url: req.url,
             headers: req.headers,
             body: req.body,
+            bodyBytes: req.bodyBytes,
             query: req.query,
         };
         log('HTTP', `${mapped.method} ${mapped.url}`);

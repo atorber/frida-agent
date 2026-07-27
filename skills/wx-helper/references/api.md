@@ -55,6 +55,8 @@ Base: `http://127.0.0.1:19088`（或 `WX_AGENT_BASE`）
 | POST | `/api/message/decryptImage` | `src`, `dir?` |
 | POST | `/api/message/audio` | `msgId`, `dir` → 优先 mp3 |
 | GET/POST | `/api/message/history` | `talker`/`contactId`, `limit?`, `offset?`, `order?`, `type?` |
+| GET/POST | `/api/sessions` | `limit?`, `offset?`, `includeStranger?` → 会话列表 |
+| POST | `/api/upload` | octet-stream(+`X-Filename`/`X-Category`) 或 multipart / base64 JSON → `{path,...}` |
 | POST | `/api/message/downloadFinderVideo` | `url`, `msgId?`, `savePath?` |
 
 收消息后 Agent 可自动：图片下载+解密、视频/文件下载、语音导出转 mp3。
