@@ -205,12 +205,13 @@ WeeBot 会查找以下路径的脚本文件：
 
 1. 在"消息推送配置"区域：
    - 勾选"启用消息推送"复选框
-   - 输入回调地址（例如：`http://127.0.0.1:8888`）
+   - 输入回调地址（默认：`http://127.0.0.1:19089/apps/hook`，指向 Apps Server）
    - 点击"设置推送配置"按钮
 
 2. 回调地址要求：
-   - 必须是完整的 HTTP/HTTPS URL
-   - 例如：`http://127.0.0.1:8888` 或 `https://your-server.com/webhook`
+   - 必须是完整的 HTTP URL（Agent 当前以明文 HTTP POST 推送）
+   - 推荐：`http://127.0.0.1:19089/apps/hook`
+   - 自建接收端示例：`http://127.0.0.1:8888`
 
 3. 查看当前配置：
    - 点击"刷新配置"按钮可查看当前推送配置状态
@@ -364,7 +365,7 @@ Agent 在 `http://127.0.0.1:19088` 端口提供 HTTP API 服务，可以通过 H
     
     {
       "enabled": true,
-      "callbackUrl": "http://127.0.0.1:8888"
+      "callbackUrl": "http://127.0.0.1:19089/apps/hook"
     }
     ```
 
@@ -419,7 +420,7 @@ curl -X POST http://127.0.0.1:19088/api/message/text \
 # 设置推送配置
 curl -X POST http://127.0.0.1:19088/api/push/config \
   -H "Content-Type: application/json" \
-  -d '{"enabled": true, "callbackUrl": "http://127.0.0.1:8888"}'
+  -d '{"enabled": true, "callbackUrl": "http://127.0.0.1:19089/apps/hook"}'
 
 # 获取推送配置
 curl http://127.0.0.1:19088/api/push/config
@@ -445,8 +446,10 @@ weebot/
 1. **运行前确保微信（WeChat.exe）已启动**
 2. **首次运行可能需要管理员权限**（Frida 附加进程需要）
 3. **确保防火墙允许 HTTP API 服务**（端口 19088）
-4. **消息推送回调地址必须是可访问的 HTTP/HTTPS URL**
-5. **建议在本地或内网环境使用，避免暴露到公网**
+4. **消息推送回调地址必须是可访问的 HTTP URL**（推荐 `http://127.0.0.1:19089/apps/hook`）
+5. **开发态优先加载仓库 `dist/agent/wx391027/index.js`**（请先 `npm run build`）
+6. **WeeBot 本身不调用大模型**；LLM 在 Apps Server（`server/`）中处理
+7. **建议在本地或内网环境使用，避免暴露到公网**
 
 ## 常见问题
 

@@ -82,13 +82,14 @@ async function main() {
     gracefulExit()
   })
 
-  // 保持进程；stdin 结束时也优雅退出（便于管道/后台）
+  // 保持进程。仅在交互终端监听 stdin 结束：PM2 / 非 TTY 下 stdin 会立刻
+  // 关闭，无条件挂 end 会导致刚 attach 就 gracefulExit。
   if (process.stdin.isTTY) {
     process.stdin.resume()
+    process.stdin.on('end', () => {
+      gracefulExit()
+    })
   }
-  process.stdin.on('end', () => {
-    gracefulExit()
-  })
 
   await new Promise(() => {})
 }

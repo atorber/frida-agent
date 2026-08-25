@@ -30,7 +30,7 @@ if %ERRORLEVEL% NEQ 0 (
     pip install pyinstaller
 )
 
-echo [步骤 1/3] 编译 Frida 脚本...
+echo [步骤 1/4] 编译 Frida 脚本...
 cd ..
 call npm run build
 if %ERRORLEVEL% NEQ 0 (
@@ -41,9 +41,12 @@ if %ERRORLEVEL% NEQ 0 (
 cd weebot
 
 echo.
-echo [步骤 2/3] 检查脚本文件...
+echo [步骤 2/4] 检查并同步脚本文件...
 if exist "..\dist\agent\wx391027\index.js" (
     echo [成功] 找到脚本文件: ..\dist\agent\wx391027\index.js
+    if not exist "agent\wx391027" mkdir agent\wx391027
+    copy /Y "..\dist\agent\wx391027\index.js" "agent\wx391027\index.js" >nul
+    echo [成功] 已同步到 weebot\agent\wx391027\index.js
 ) else (
     echo [错误] 未找到脚本文件: ..\dist\agent\wx391027\index.js
     echo 请先运行: npm run build
@@ -52,7 +55,7 @@ if exist "..\dist\agent\wx391027\index.js" (
 )
 
 echo.
-echo [步骤 3/3] 使用 PyInstaller 打包...
+echo [步骤 3/4] 使用 PyInstaller 打包...
 pyinstaller WeeBot.spec
 if %ERRORLEVEL% NEQ 0 (
     echo [错误] PyInstaller 打包失败
@@ -61,6 +64,8 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
+echo.
+echo [步骤 4/4] 完成
 echo ========================================
 echo 构建完成！
 echo ========================================

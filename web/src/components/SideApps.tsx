@@ -29,7 +29,8 @@ export function SideApps({ onUseReply, composerDraft }: Props) {
   const { activeTalker, sessions } = useAgent()
   const session = sessions.find((s) => s.id === activeTalker)
   const talkerName = session?.name || activeTalker || '未选择会话'
-  const [expanded, setExpanded] = useState(true)
+  // 默认收起：不挂载助手面板，避免一进会话就触发 LLM 分析；展开后才渲染并请求
+  const [expanded, setExpanded] = useState(false)
   const [activeId, setActiveId] = useState<SideAppId>('assistant')
 
   const active = APPS.find((a) => a.id === activeId)!

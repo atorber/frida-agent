@@ -27,15 +27,18 @@ if ! python3 -c "import PyInstaller" 2>/dev/null && ! python -c "import PyInstal
     pip3 install pyinstaller || pip install pyinstaller
 fi
 
-echo "[步骤 1/3] 编译 Frida 脚本..."
+echo "[步骤 1/4] 编译 Frida 脚本..."
 cd ..
 npm run build
 cd weebot
 
 echo ""
-echo "[步骤 2/3] 检查脚本文件..."
+echo "[步骤 2/4] 检查并同步脚本文件..."
 if [ -f "../dist/agent/wx391027/index.js" ]; then
     echo "[成功] 找到脚本文件: ../dist/agent/wx391027/index.js"
+    mkdir -p agent/wx391027
+    cp -f "../dist/agent/wx391027/index.js" "agent/wx391027/index.js"
+    echo "[成功] 已同步到 weebot/agent/wx391027/index.js"
 else
     echo "[错误] 未找到脚本文件: ../dist/agent/wx391027/index.js"
     echo "请先运行: npm run build"
@@ -43,10 +46,11 @@ else
 fi
 
 echo ""
-echo "[步骤 3/3] 使用 PyInstaller 打包..."
+echo "[步骤 3/4] 使用 PyInstaller 打包..."
 python3 -m PyInstaller WeeBot.spec || python -m PyInstaller WeeBot.spec
 
 echo ""
+echo "[步骤 4/4] 完成"
 echo "========================================"
 echo "构建完成！"
 echo "========================================"
