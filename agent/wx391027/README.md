@@ -1,3 +1,37 @@
+# wx391027 — 微信 3.9.10.27
+
+本目录为 **微信 3.9.10.27**（`WeChat.exe`）的 Frida Agent，能力最全，为仓库推荐版本。
+
+- 总览与其它版本：[仓库根 README](../../README.md)
+- 对照版本（4.1.10.27）：[../wx411027/README.md](../wx411027/README.md)
+
+默认 HTTP：`http://127.0.0.1:19088`  
+统一响应：`{ "code": 1, "data": ..., "msg": "success" }`（`code=0` 失败）
+
+## 使用方式
+
+```bash
+cd agent
+npm install
+npm run build:wx391027
+npm run start:wx391027
+```
+
+开发监视编译：`npm run watch:wx391027`  
+REPL 注入：`npm run start:wx391027:repl`
+
+探活与常用操作（仓库根目录）：
+
+```bash
+python skills/wx-helper/scripts/wx_api.py health
+python skills/wx-helper/scripts/wx_api.py check-login
+python skills/wx-helper/scripts/wx_api.py send-text --to filehelper --text "hello"
+```
+
+优雅停止 HTTP（不杀微信）：`POST /api/server/stop`，或 `npm run start` 下 Ctrl+C。
+
+Postman 集合：[wx391027.postman_collection.json](./wx391027.postman_collection.json)
+
 ## 功能清单
 
 |功能|是否支持|说明|

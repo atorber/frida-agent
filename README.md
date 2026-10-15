@@ -1,112 +1,96 @@
 # Frida Agent for WeChat
 
-基于 Frida 的微信自动化工具，支持微信 3.9.10.27 版本。
+基于 [Frida](https://frida.re/) 的微信桌面端自动化 Agent：注入进程后提供本地 **HTTP API**（默认 `http://127.0.0.1:19088`），用于发消息、查联系人/群、查库等。
 
-## 功能特性
+按**微信客户端小版本**拆分实现目录；各版本能力与启动方式见对应 README，本文只做总览与导航。
 
-- ✅ 查询登录状态
-- ✅ 获取联系人列表和详情
-- ✅ 获取群列表和详情
-- ✅ 发送文本、图片、文件消息
-- ✅ 支持 @ 消息和拍一拍
-- ✅ 消息转发
-- ✅ 接收消息推送（支持回调）
-- ✅ 数据库查询
-- ✅ HTTP API 接口
+## 微信版本支持
 
-详细功能清单请查看 [agent/wx391027/README.md](./agent/wx391027/README.md)
+| 目录 | 微信版本 | 进程 / DLL | 状态 | 说明 |
+|--|--|--|--|--|
+| [agent/wx391027](./agent/wx391027/README.md) | **3.9.10.27** | `WeChat.exe` | **推荐 / 能力最全** | 对齐 WCF 可用能力：收发消息、媒体、朋友圈、群管理、推送等 |
+| [agent/wx411027](./agent/wx411027/README.md) | **4.1.10.27** | `Weixin.exe` / `Weixin.dll` | **可用 / 能力子集** | HTTP 形态对齐 391027；原生发送/解码来自 aixed，联系人/群/历史走 4.x SQLite |
+| `agent/wx41730` 等 | 4.1.x 试验 | — | 实验 / 未完成 | 偏移探索与半成品，勿当生产使用 |
+| [agent/legacy](./agent/legacy/README.md) | 旧实现 | — | 废弃 | 仅作参考 |
+
+**选型建议**
+
+- 仍使用 **3.9.10.27** → 用 `wx391027`
+- 已升级到 **4.1.10.27（新版微信）** → 用 `wx411027`（文件/表情/收消息 Hook 等尚未实现）
+
+## 文档导航
+
+| 文档 | 内容 |
+|--|--|
+| [agent/wx391027/README.md](./agent/wx391027/README.md) | 3.9.10.27：能力清单、启动方式、完整 HTTP 接口 |
+| [agent/wx411027/README.md](./agent/wx411027/README.md) | 4.1.10.27：能力清单、启动方式、已实现 / 未实现接口 |
+| [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md) | 仓库目录结构 |
+| [docs/](./docs/) | 逆向笔记等（如 `wx-4.1.7.30.md`） |
+| [skills/wx-helper](./skills/wx-helper/SKILL.md) | Cursor Skill：通过 HTTP 操作已注入的 Agent |
 
 ## 快速开始
 
-### 1. 安装依赖
+依赖安装在 `agent/` 下：
 
 ```bash
+cd agent
 npm install
 ```
 
-### 2. 编译脚本
+### 3.9.10.27（wx391027）
 
 ```bash
-npm run build
-```
-
-或者：
-
-```bash
-frida-compile agent/wx391027/index.ts -o dist/agent/wx391027/index.js -c
-```
-
-### 3. 启动微信并加载脚本
-
-```bash
+cd agent
+npm run build:wx391027
 npm run start:wx391027
 ```
 
-或者：
+### 4.1.10.27（wx411027）
 
 ```bash
-frida -l dist/agent/wx391027/index.js WeChat.exe
+cd agent
+npm run build:wx411027
+# Node frida ABI 不匹配时用 Python 注入：
+python wx411027/tools/run_agent.py
 ```
 
-### 4. 测试 API
-
-脚本加载成功后，HTTP 服务器会在 `http://localhost:19088` 启动。
+注入成功后探活：
 
 ```bash
-# 检查服务器状态
-curl http://localhost:19088/api/health
-
-# 检查登录状态
-curl http://localhost:19088/api/checkLogin
-
-# 获取联系人列表
-curl http://localhost:19088/api/contacts
+# 仓库根目录
+python skills/wx-helper/scripts/wx_api.py health
 ```
 
-## 项目结构
-
-详细的项目结构请查看 [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md)
-
-```
-frida-agent/
-├── agent/              # Frida Agent 源代码
-│   └── wx391027/      # 微信 3.9.10.27 版本实现
-├── dist/              # 编译输出
-├── tests/             # 测试脚本
-├── docs/              # 文档
-└── examples/          # 示例代码
-```
-
-## 文档
-
-- [启动指南](./docs/START.md)
-- [API 参考文档](./docs/api-reference.md)
-- [Wiki](./docs/wiki.md)
-- [项目结构说明](./PROJECT_STRUCTURE.md)
-- [回调测试说明](./tests/README_CALLBACK_TEST.md)
-
-## 开发
-
-### 开发模式（自动重新编译）
+或：
 
 ```bash
-npm run watch:wx391027
+curl http://127.0.0.1:19088/api/health
 ```
 
-### 运行测试
+统一响应形如：`{ "code": 1, "data": ..., "msg": "success" }`（`code=0` 表示失败或该版本未实现）。
 
-```bash
-# 启动回调测试服务器
-python tests/test_callback_server.py
+## 项目结构（摘要）
 
-# 运行 API 测试
-python tests/test_api.py
 ```
+frida-agent-example/
+├── agent/
+│   ├── wx391027/          # 微信 3.9.10.27 Agent（推荐）
+│   ├── wx411027/          # 微信 4.1.10.27 Agent
+│   ├── legacy/            # 废弃代码
+│   └── package.json       # frida-compile / 启动脚本
+├── dist/agent/            # 编译产物 *.js
+├── skills/wx-helper/      # HTTP 调用封装
+├── docs/                  # 版本逆向笔记等
+├── web/ server/ client/   # 周边控制台 / 服务（可选）
+└── README.md              # 本文件（总览）
+```
+
+## 开发约定
+
+- **一版本一目录**：偏移、DLL 名、DB schema 不可混用
+- **HTTP 路径尽量对齐**：新版本优先复用 `wx391027` 的路由命名，能力不足时返回明确未实现信息
+- **不要**在未确认版本时用错 Agent；`GET /api/health` 的 `version` 字段可核对
 
 ## 许可证
 
-[LICENSE](./LICENSE)
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
+见 [LICENSE](./LICENSE)（若仓库内提供）。

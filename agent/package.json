@@ -13,6 +13,9 @@
     "build:wx391027": "frida-compile wx391027/index.ts -o ../dist/agent/wx391027/index.js",
     "start:wx391027": "node wx391027/tools/start.js",
     "start:wx391027:repl": "frida -l ../dist/agent/wx391027/index.js WeChat.exe",
+    "build:wx411027": "frida-compile wx411027/index.ts -o ../dist/agent/wx411027/index.js",
+    "watch:wx411027": "frida-compile wx411027/index.ts -o ../dist/agent/wx411027/index.js -w",
+    "start:wx411027": "node wx411027/tools/start.js",
     "lint": "eslint . --ext .ts,.js,.jsx,.tsx ",
     "lint:fix": "eslint . --ext .ts,.js,.jsx,.tsx --fix"
   },
