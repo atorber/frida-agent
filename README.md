@@ -10,7 +10,6 @@
 |--|--|--|--|--|
 | [agent/wx391027](./agent/wx391027/README.md) | **3.9.10.27** | `WeChat.exe` | **推荐 / 能力最全** | 对齐 WCF 可用能力：收发消息、媒体、朋友圈、群管理、推送等 |
 | [agent/wx411027](./agent/wx411027/README.md) | **4.1.10.27** | `Weixin.exe` / `Weixin.dll` | **可用 / 能力子集** | HTTP 形态对齐 391027；原生发送/解码来自 aixed，联系人/群/历史走 4.x SQLite |
-| `agent/wx41730` 等 | 4.1.x 试验 | — | 实验 / 未完成 | 偏移探索与半成品，勿当生产使用 |
 | [agent/legacy](./agent/legacy/README.md) | 旧实现 | — | 废弃 | 仅作参考 |
 
 **选型建议**
