@@ -17,12 +17,14 @@ import {
   roomDel,
   roomTopic,
 } from './room.js'
+import { xmlOffsetsLookValid, detectXmlKind } from './forwardXml.js'
 import {
   messageSendText,
   messageSendImage,
   messageSendFile,
   messageSendPat,
   messageForward,
+  messageForwardXml,
   messageSendRichText,
   messageSendEmotion,
   decryptImage,
@@ -98,11 +100,12 @@ function handleRequest(req: {
           'message/text',
           'message/image',
           'message/decryptImage',
+          'message/forward(xml)',
           'db/*',
           'message/history',
           'sessions',
         ],
-        note: '偏移与发送/解码来自 aixed；联系人/群/会话/历史走 contact/session/message_N.db',
+        note: '偏移与发送/解码/XML转发来自 aixed；联系人/群/会话/历史走 contact/session/message_N.db',
       })
     }
 
@@ -183,7 +186,28 @@ function handleRequest(req: {
     }
 
     if (path === '/api/message/pat' && method === 'POST') return unsupported('pat')
-    if (path === '/api/message/forward' && method === 'POST') return unsupported('forward')
+    if (path === '/api/message/forward' && method === 'POST') {
+      const body = parseBody(req.body)
+      const to =
+        body.to_wxid || body.contactId || body.receiver || body.to || ''
+      const xml = body.content || body.xml || ''
+      if (xml && to) {
+        if (!detectXmlKind(String(xml))) {
+          return fail('不支持的 XML（需含 <img / <videomsg / <emoji ）')
+        }
+        if (!xmlOffsetsLookValid()) {
+          return fail(
+            'XML 转发偏移未校准：aixed Offsets 标注为 4.1.5.30，当前 4.1.10.27 Weixin.dll 虚表无效（已拦截避免崩溃）',
+          )
+        }
+        const r = messageForwardXml(String(to), String(xml))
+        return r < 0 ? fail('转发失败', r) : ok(r)
+      }
+      if (body.msgId != null && (body.receiver || body.to)) {
+        return unsupported('按 msgId 转发（请传 to_wxid + content XML，对齐 aixed ForwardXMLMsg）')
+      }
+      return fail('需要 to_wxid/contactId 与 content/xml（img/videomsg/emoji）')
+    }
     if (path === '/api/message/richText' && method === 'POST') return unsupported('richText')
     if (path === '/api/message/emotion' && method === 'POST') return unsupported('emotion')
     if (path === '/api/message/downloadAttach' && method === 'POST') return unsupported('downloadAttach')
@@ -267,6 +291,20 @@ function handleRequest(req: {
       const r = decryptImage(String(body.src_path), String(body.dst_path))
       return r < 0 ? fail('fail', r) : ok({ ret: 0, retmsg: 'success' })
     }
+    if (path === '/ForwardXMLMsg' && method === 'POST') {
+      const body = parseBody(req.body)
+      const to = String(body.to_wxid || body.contactId || '')
+      const xml = String(body.content || body.xml || '')
+      if (!to || !xml) return fail('需要 to_wxid 与 content')
+      if (!detectXmlKind(xml)) return fail('不支持的 XML（需含 <img / <videomsg / <emoji ）')
+      if (!xmlOffsetsLookValid()) {
+        return fail(
+          'XML 转发偏移未校准：aixed Offsets 标注为 4.1.5.30，当前 4.1.10.27 Weixin.dll 虚表无效（已拦截避免崩溃）',
+        )
+      }
+      const r = messageForwardXml(to, xml)
+      return r < 0 ? fail('fail', r) : ok({ ret: 0, retmsg: 'success' })
+    }
     if (path === '/GetSelfProfile' && method === 'POST') return ok(contactSelfInfo())
     if (path === '/QueryDB/status') {
       return ok({ IsLogin: checkLogin() === 1 ? 1 : 0, hWeixin: Process.getModuleByName(WX_DLL).base.toString() })
@@ -305,6 +343,7 @@ rpc.exports = {
   messageSendFile,
   messageSendPat,
   messageForward,
+  messageForwardXml,
   messageSendRichText,
   messageSendEmotion,
   decryptImage,

@@ -33,7 +33,8 @@ export const offsets = {
   msg_buf_size_text: 0x768 * 8,
   msg_buf_size_image: 0x7c0,
 
-  // —— XML 转发（global.h Offsets，4.1.5.30 注释；aixed 4.1.10.27 仍引用）——
+  // —— XML 转发（aixed global.h `namespace Offsets`，源码注释为 4.1.5.30）——
+  // 实测在 4.1.10.27 Weixin.dll 上这些地址不是合法 vtable；调用前见 forwardXml.xmlOffsetsLookValid()
   IMAGE_FIELD_VTABLE: 0x80d1098,
   IMAGE_FIELD_VTABLE2: 0x80d1128,
   IMAGE_DATA_VTABLE: 0x7415d28,

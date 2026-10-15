@@ -3,6 +3,7 @@
  */
 import { offsets, WX_DLL } from './offset.js'
 import { setWeixinString, setWeixinStringU, log, heapAlloc, pathExists, fileSize } from './utils.js'
+import { forwardXmlNative, xmlOffsetsLookValid, detectXmlKind } from './forwardXml.js'
 
 const UNKNOWN_BLOCK_QWORDS = 64
 const BUF_QWORDS = 16
@@ -13,13 +14,14 @@ let _pumpHooked = false
 let _mainTid = 0
 let _sending = false
 
-type JobKind = 'text' | 'image' | 'decode'
+type JobKind = 'text' | 'image' | 'decode' | 'xml'
 type SendJob = {
   kind: JobKind
   contactId: string
   text: string
   path: string
   dstPath: string
+  xml: string
   done: boolean
   result: number
   error: string | null
@@ -244,6 +246,7 @@ function ensurePumpHook(): void {
       try {
         if (job.kind === 'text') job.result = sendTextNative(job.contactId, job.text)
         else if (job.kind === 'image') job.result = sendImageNative(job.contactId, job.path)
+        else if (job.kind === 'xml') job.result = forwardXmlNative(job.contactId, job.xml)
         else job.result = decodePicNative(job.path, job.dstPath)
       } catch (e: any) {
         job.result = -1
@@ -296,6 +299,7 @@ export const messageSendText = (contactId: string, text: string, atWxids?: strin
       text: msgText,
       path: '',
       dstPath: '',
+      xml: '',
       done: false,
       result: 0,
       error: null,
@@ -316,6 +320,7 @@ export const messageSendImage = (contactId: string, path: string): number => {
       text: '',
       path,
       dstPath: '',
+      xml: '',
       done: false,
       result: 0,
       error: null,
@@ -334,6 +339,7 @@ export const decryptImage = (src: string, dst: string): number => {
       text: '',
       path: src,
       dstPath: dst,
+      xml: '',
       done: false,
       result: 0,
       error: null,
@@ -344,9 +350,37 @@ export const decryptImage = (src: string, dst: string): number => {
   }
 }
 
+/** aixed ForwardXMLMsg：转发 img / videomsg / emoji XML */
+export const messageForwardXml = (toWxid: string, xml: string): number => {
+  try {
+    if (!toWxid || !xml) throw new Error('toWxid/xml empty')
+    if (!detectXmlKind(xml)) throw new Error('unsupported xml type (need img/videomsg/emoji)')
+    if (!xmlOffsetsLookValid()) {
+      throw new Error(
+        'XML Offsets invalid on this Weixin.dll (aixed labeled 4.1.5.30; need refresh for 4.1.10.27)',
+      )
+    }
+    return enqueue({
+      kind: 'xml',
+      contactId: toWxid,
+      text: '',
+      path: '',
+      dstPath: '',
+      xml,
+      done: false,
+      result: 0,
+      error: null,
+    })
+  } catch (e: any) {
+    console.error('[MSG] messageForwardXml 异常:', e && e.message ? e.message : e)
+    return -1
+  }
+}
+
 /** aixed 4.1.10.27 未提供这些原生 call，保留接口返回 -2 */
 export const messageSendFile = (_c: string, _p: string): number => -2
 export const messageSendPat = (_room: string, _wxid: string): number => -2
+/** 按 msgId 转发未实现；请用 messageForwardXml / POST content */
 export const messageForward = (_msgId: string, _to: string): number => -2
 export const messageSendRichText = (_msg: any): number => -2
 export const messageSendEmotion = (_c: string, _p: string): number => -2
