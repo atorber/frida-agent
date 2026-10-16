@@ -44,17 +44,20 @@ python skills/wx-helper/scripts/wx_api.py send-image --to filehelper --path "C:\
 |--|--|--|
 | 发文本 | aixed `SendText` | `POST /api/message/text` |
 | 发图片 | aixed `SendImage` | `POST /api/message/image` |
+| 发文件 | aixed 统一发送管线 `mediaType=49` | `POST /api/message/file` |
+| 发表情 | 同上 `mediaType=47`（gif） | `POST /api/message/emotion` |
 | 解码图片 | aixed `DecodePic` | `POST /api/message/decryptImage` |
-| 转发 XML | aixed `ForwardXMLMsg` 逻辑已移植 | `POST /api/message/forward`、`/ForwardXMLMsg`（**偏移待校准**，见下） |
+| 转发 XML | 原生偏移无效时 **typed XML 回退**（按 img/video/emoji 设 type） | `POST /api/message/forward`、`/ForwardXMLMsg` |
+| 收消息 | DoAddMsg 特征扫描（`48 89 85 F8 01 00 00`） | `GET\|POST /api/message/listen` |
 | 登录状态 / 自己 | `contact.db` 路径 + contact 行 | `GET /api/checkLogin`、`/api/contacts/self` |
 | 联系人 / 群 / 成员 | `contact.db`（contact / chat_room / name2id） | `/api/contacts`、`/api/rooms`、`/api/room/members` |
 | 数据库 | aixed SQLITE3_API_ROUTINES + VFS 扫描 | `/api/db/*` |
 | 聊天记录 / 会话 | `message_N.db`（`Msg_{md5}`）/ `session.db` | `/api/message/history`、`/api/sessions` |
-| 发文件 / 拍一拍 / 按 msgId 转发 / 收消息 Hook / SNS / 群管理 | aixed 未提供 | 见下方「未实现」 |
+| 拍一拍 / 按 msgId 转发 / SNS / 群管理 / 推送回调 | 未实现 | 见下方「未实现」 |
 
-与 `wx391027` 相比：本版本**没有**收消息推送、文件发送、拍一拍、按 msgId 转发、朋友圈、群管理等。
+**XML 转发说明**：aixed `Offsets` 标注为 **4.1.5.30**，在当前 DLL 上虚表非法，原生 `ForwardXML` 会被跳过；自动回退为按 XML 类型设置 `mediaType` 后走文本消息管线发送 XML 正文。
 
-**XML 转发说明**：代码已按 aixed `wx_send_xml.cpp` 接好（`/ForwardXMLMsg`），但 aixed `global.h` 里 `Offsets` 明确标注为 **4.1.5.30**。在当前 **4.1.10.27** `Weixin.dll` 上这些虚表地址非法，调用会被安全拦截并返回错误（避免崩溃）。校准偏移后即可直接启用。
+**收消息说明**：首选 RVA `0x16d2faf`（相对 4.1.9.23 DoAddMsg + send_message 增量），启动 hook 时若字节不匹配则在 `0x1600000–0x1750000` 扫描特征。`GET /api/message/listen` 可查状态与最近消息；`POST` 传 `{ "enabled": true|false }` 开关。
 
 ## HTTP 接口
 
@@ -77,8 +80,11 @@ python skills/wx-helper/scripts/wx_api.py send-image --to filehelper --path "C:\
 | GET | `/api/message/types` | 消息类型常量 |
 | POST | `/api/message/text` | 发文本：`{ contactId, text, atWxids? }` |
 | POST | `/api/message/image` | 发图片：`{ contactId, path }` |
+| POST | `/api/message/file` | 发文件：`{ contactId, path }`（`mediaType=49`） |
+| POST | `/api/message/emotion` | 发表情：`{ contactId, path }`（gif，`mediaType=47`） |
 | POST | `/api/message/decryptImage` | 解码图片：`{ src, dst }` |
 | POST | `/api/message/forward` | 转发 XML：`{ to_wxid\|contactId, content\|xml }`（img/videomsg/emoji） |
+| GET/POST | `/api/message/listen` | 收消息开关 / 状态（含 `rva`、`recent`） |
 | GET/POST | `/api/message/history` | 聊天记录：`talker` + `limit?` |
 | GET/POST | `/api/sessions` | 会话列表：`limit?` |
 | GET | `/api/db/names` | 已打开 DB 名 |
@@ -93,7 +99,7 @@ python skills/wx-helper/scripts/wx_api.py send-image --to filehelper --path "C:\
 | POST | `/SendTextMsg` | 发文本（`wxidorgid`/`contactId` + `msg`/`text`） |
 | POST | `/SendImgMsg` | 发图片 |
 | POST | `/Decode_Pic` | 解码图片（`src_path` / `dst_path`） |
-| POST | `/ForwardXMLMsg` | 转发 XML（`to_wxid` + `content`） |
+| POST | `/ForwardXMLMsg` | 转发 XML（`to_wxid` + `content`；偏移无效时 typed 回退） |
 | POST | `/GetSelfProfile` | 自己资料 |
 | GET | `/QueryDB/status` | 登录状态 + DLL base |
 | POST | `/QueryDB/GetAllDBName` | 同 `/api/db/info` |
@@ -103,13 +109,10 @@ python skills/wx-helper/scripts/wx_api.py send-image --to filehelper --path "C:\
 
 | 方法 | 路径 |
 |--|--|
-| POST | `/api/message/file` |
 | POST | `/api/message/pat` |
 | POST | `/api/message/richText` |
-| POST | `/api/message/emotion` |
 | POST | `/api/message/downloadAttach` |
 | POST | `/api/message/audio` |
-| GET | `/api/message/listen` |
 | POST | `/api/sns/refresh` |
 | GET | `/api/sns/listen` |
 | GET/POST | `/api/push/config` |

@@ -14,7 +14,7 @@ let _pumpHooked = false
 let _mainTid = 0
 let _sending = false
 
-type JobKind = 'text' | 'image' | 'decode' | 'xml'
+type JobKind = 'text' | 'image' | 'media' | 'decode' | 'xml' | 'xmlTyped'
 type SendJob = {
   kind: JobKind
   contactId: string
@@ -22,6 +22,7 @@ type SendJob = {
   path: string
   dstPath: string
   xml: string
+  mediaType: number
   done: boolean
   result: number
   error: string | null
@@ -121,12 +122,15 @@ function sendTextNative(contactId: string, text: string): number {
   return 1
 }
 
-/** 对齐 aixed BuildSendParam1_sub + SendImage */
-function sendImageNative(contactId: string, imgPath: string): number {
+/**
+ * 对齐 aixed BuildSendParam1_sub + SendImage / 统一发送文件类接口
+ * mediaType: 3=image, 43=video, 47=gif/emotion, 49=file
+ */
+function sendMediaNative(contactId: string, filePath: string, mediaType: number): number {
   const b = base()
   const fns = getFns()
-  if (!pathExists(imgPath)) throw new Error('filepath does not exist: ' + imgPath)
-  const size = fileSize(imgPath)
+  if (!pathExists(filePath)) throw new Error('filepath does not exist: ' + filePath)
+  const size = fileSize(filePath)
   if (size <= 0) throw new Error('file size is 0')
 
   const msgBuf = heapAlloc(offsets.msg_buf_size_image)
@@ -144,11 +148,11 @@ function sendImageNative(contactId: string, imgPath: string): number {
   setWeixinString(msgBuf.add(0xc0), contactId)
   msgBuf.add(0xd0).writeU64(uint64(contactId.length))
   msgBuf.add(0xd8).writeU64(uint64(calcWxCapacity(contactId.length)))
-  msgBuf.add(0xe8).writeU64(uint64(3)) // png/jpg
+  msgBuf.add(0xe8).writeU64(uint64(mediaType >>> 0))
 
-  setWeixinStringU(msgBuf.add(0xf0), imgPath)
-  msgBuf.add(0x100).writeU64(uint64(imgPath.length))
-  msgBuf.add(0x108).writeU64(uint64(calcWxCapacity(imgPath.length)))
+  setWeixinStringU(msgBuf.add(0xf0), filePath)
+  msgBuf.add(0x100).writeU64(uint64(filePath.length))
+  msgBuf.add(0x108).writeU64(uint64(calcWxCapacity(filePath.length)))
 
   msgBuf.add(0x130).writeU64(uint64(0xf))
   msgBuf.add(0x150).writeU64(uint64(7))
@@ -173,6 +177,23 @@ function sendImageNative(contactId: string, imgPath: string): number {
   buildSendParam2(arg2)
   fns.sendMessage(arg1, arg2)
   return 1
+}
+
+function sendImageNative(contactId: string, imgPath: string): number {
+  return sendMediaNative(contactId, imgPath, offsets.media_type_image)
+}
+
+/** 扩展名 → mediaType（对齐 aixed 统一发送文件类） */
+export function guessMediaType(filePath: string): number {
+  const lower = filePath.toLowerCase()
+  const dot = lower.lastIndexOf('.')
+  const ext = dot >= 0 ? lower.substring(dot + 1) : ''
+  if (['gif', 'wxgf'].indexOf(ext) >= 0) return offsets.media_type_emotion
+  if (['mp4', 'mov', 'avi', 'mkv'].indexOf(ext) >= 0) return offsets.media_type_video
+  if (['png', 'jpg', 'jpeg', 'bmp', 'webp', 'tif', 'tiff'].indexOf(ext) >= 0) {
+    return offsets.media_type_image
+  }
+  return offsets.media_type_file
 }
 
 function decodePicNative(src: string, dst: string): number {
@@ -246,7 +267,11 @@ function ensurePumpHook(): void {
       try {
         if (job.kind === 'text') job.result = sendTextNative(job.contactId, job.text)
         else if (job.kind === 'image') job.result = sendImageNative(job.contactId, job.path)
+        else if (job.kind === 'media')
+          job.result = sendMediaNative(job.contactId, job.path, job.mediaType)
         else if (job.kind === 'xml') job.result = forwardXmlNative(job.contactId, job.xml)
+        else if (job.kind === 'xmlTyped')
+          job.result = forwardXmlAsTypedContent(job.contactId, job.xml)
         else job.result = decodePicNative(job.path, job.dstPath)
       } catch (e: any) {
         job.result = -1
@@ -279,6 +304,21 @@ function enqueue(job: SendJob): number {
   return job.result
 }
 
+function emptyJob(partial: Partial<SendJob> & Pick<SendJob, 'kind'>): SendJob {
+  return {
+    kind: partial.kind,
+    contactId: partial.contactId || '',
+    text: partial.text || '',
+    path: partial.path || '',
+    dstPath: partial.dstPath || '',
+    xml: partial.xml || '',
+    mediaType: partial.mediaType || 0,
+    done: false,
+    result: 0,
+    error: null,
+  }
+}
+
 export const messageSendText = (contactId: string, text: string, atWxids?: string[]): number => {
   const start = Date.now()
   try {
@@ -293,17 +333,7 @@ export const messageSendText = (contactId: string, text: string, atWxids?: strin
         }
       }
     }
-    const r = enqueue({
-      kind: 'text',
-      contactId,
-      text: msgText,
-      path: '',
-      dstPath: '',
-      xml: '',
-      done: false,
-      result: 0,
-      error: null,
-    })
+    const r = enqueue(emptyJob({ kind: 'text', contactId, text: msgText }))
     log('MSG', `messageSendText ok, ${Date.now() - start}ms -> ${contactId}`)
     return r
   } catch (e: any) {
@@ -314,17 +344,7 @@ export const messageSendText = (contactId: string, text: string, atWxids?: strin
 
 export const messageSendImage = (contactId: string, path: string): number => {
   try {
-    return enqueue({
-      kind: 'image',
-      contactId,
-      text: '',
-      path,
-      dstPath: '',
-      xml: '',
-      done: false,
-      result: 0,
-      error: null,
-    })
+    return enqueue(emptyJob({ kind: 'image', contactId, path }))
   } catch (e: any) {
     console.error('[MSG] messageSendImage 异常:', e)
     return -1
@@ -333,63 +353,100 @@ export const messageSendImage = (contactId: string, path: string): number => {
 
 export const decryptImage = (src: string, dst: string): number => {
   try {
-    return enqueue({
-      kind: 'decode',
-      contactId: '',
-      text: '',
-      path: src,
-      dstPath: dst,
-      xml: '',
-      done: false,
-      result: 0,
-      error: null,
-    })
+    return enqueue(emptyJob({ kind: 'decode', path: src, dstPath: dst }))
   } catch (e: any) {
     console.error('[MSG] decryptImage 异常:', e)
     return -1
   }
 }
 
-/** aixed ForwardXMLMsg：转发 img / videomsg / emoji XML */
+/** 按 XML type 选 mediaType，经文本消息管线发送 XML 正文（原生 ForwardXML 偏移无效时的回退） */
+function forwardXmlAsTypedContent(toWxid: string, xml: string): number {
+  const kind = detectXmlKind(xml)
+  let msgType = offsets.media_type_file
+  if (kind === 'image') msgType = offsets.media_type_image
+  else if (kind === 'video') msgType = offsets.media_type_video
+  else if (kind === 'animation') msgType = offsets.media_type_emotion
+
+  const b = base()
+  const fns = getFns()
+  const msgBuf = heapAlloc(offsets.msg_buf_size_text)
+  msgBuf.writePointer(b.add(offsets.txt_message_vtbl))
+  msgBuf.add(8).writeU64(uint64(offsets.txt_ctrl_const))
+  const msg = msgBuf.add(0x10)
+  fns.txtCtr(msg)
+  setWeixinString(msg.add(offsets.tm_receiver), toWxid)
+  setWeixinString(msg.add(offsets.tm_content), xml)
+  msg.add(offsets.tm_type).writeU64(uint64(msgType))
+  msg.add(offsets.tm_msg_len).writeU64(uint64(xml.length))
+  const arg1 = buildArg1(msgBuf)
+  const arg2 = heapAlloc(0xe8)
+  buildSendParam2(arg2)
+  fns.sendMessage(arg1, arg2)
+  return 1
+}
+
+/** aixed ForwardXMLMsg：优先原生；虚表非法则回退为按类型发送 XML 内容 */
 export const messageForwardXml = (toWxid: string, xml: string): number => {
   try {
     if (!toWxid || !xml) throw new Error('toWxid/xml empty')
     if (!detectXmlKind(xml)) throw new Error('unsupported xml type (need img/videomsg/emoji)')
-    if (!xmlOffsetsLookValid()) {
-      throw new Error(
-        'XML Offsets invalid on this Weixin.dll (aixed labeled 4.1.5.30; need refresh for 4.1.10.27)',
-      )
+    if (xmlOffsetsLookValid()) {
+      return enqueue(emptyJob({ kind: 'xml', contactId: toWxid, xml }))
     }
-    return enqueue({
-      kind: 'xml',
-      contactId: toWxid,
-      text: '',
-      path: '',
-      dstPath: '',
-      xml,
-      done: false,
-      result: 0,
-      error: null,
-    })
+    log('MSG', 'ForwardXML native offsets invalid; fallback typed XML content')
+    return enqueue(emptyJob({ kind: 'xmlTyped', contactId: toWxid, xml }))
   } catch (e: any) {
     console.error('[MSG] messageForwardXml 异常:', e && e.message ? e.message : e)
     return -1
   }
 }
 
-/** aixed 4.1.10.27 未提供这些原生 call，保留接口返回 -2 */
-export const messageSendFile = (_c: string, _p: string): number => -2
+export const messageSendFile = (contactId: string, path: string): number => {
+  try {
+    if (!contactId || !path) return -1
+    return enqueue(
+      emptyJob({
+        kind: 'media',
+        contactId,
+        path,
+        mediaType: offsets.media_type_file,
+      }),
+    )
+  } catch (e: any) {
+    console.error('[MSG] messageSendFile 异常:', e)
+    return -1
+  }
+}
+
+export const messageSendEmotion = (contactId: string, path: string): number => {
+  try {
+    if (!contactId || !path) return -1
+    return enqueue(
+      emptyJob({
+        kind: 'media',
+        contactId,
+        path,
+        mediaType: offsets.media_type_emotion,
+      }),
+    )
+  } catch (e: any) {
+    console.error('[MSG] messageSendEmotion 异常:', e)
+    return -1
+  }
+}
+
 export const messageSendPat = (_room: string, _wxid: string): number => -2
 /** 按 msgId 转发未实现；请用 messageForwardXml / POST content */
 export const messageForward = (_msgId: string, _to: string): number => -2
 export const messageSendRichText = (_msg: any): number => -2
-export const messageSendEmotion = (_c: string, _p: string): number => -2
 export const downloadAttach = (_msgId: string, _extra?: string): any => null
 export const getAudio = (_msgId: string, _dir?: string): any => null
 export const refreshPyq = (_id?: number): number => -2
 export const getMsgTypes = (): Record<string, number> => ({
   text: 1,
-  image: 3,
-  file: 49,
-  emotion: 47,
+  image: offsets.media_type_image,
+  video: offsets.media_type_video,
+  file: offsets.media_type_file,
+  emotion: offsets.media_type_emotion,
 })

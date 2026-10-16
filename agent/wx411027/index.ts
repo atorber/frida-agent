@@ -17,7 +17,7 @@ import {
   roomDel,
   roomTopic,
 } from './room.js'
-import { xmlOffsetsLookValid, detectXmlKind } from './forwardXml.js'
+import { detectXmlKind } from './forwardXml.js'
 import {
   messageSendText,
   messageSendImage,
@@ -34,6 +34,17 @@ import {
   getMsgTypes,
 } from './message.js'
 import {
+  enableRecvMsg,
+  disableRecvMsg,
+  isRecvMsgEnabled,
+  getHookedRecvRva,
+  resolveDoAddMsgRva,
+  getMsgStructDumps,
+  clearMsgStructDumps,
+  armMsgStructDump,
+} from './recv.js'
+import { Message } from './types.js'
+import {
   getDbNames,
   getDbTables,
   execDbQuery,
@@ -41,6 +52,22 @@ import {
   queryChatHistory,
   querySessionList,
 } from './sqlite.js'
+
+const RECENT_MSG_MAX = 50
+const recentMsgs: Message[] = []
+
+function onRecvChatMessage(msg: Message) {
+  try {
+    recentMsgs.push(msg)
+    while (recentMsgs.length > RECENT_MSG_MAX) recentMsgs.shift()
+    log(
+      'RECV',
+      `type=${msg.type} from=${msg.talkerId || msg.roomId} id=${msg.id} text=${(msg.text || '').slice(0, 80)}`,
+    )
+  } catch (e) {
+    console.error('[RECV] handler', e)
+  }
+}
 
 const HTTP_PORT = 19088
 
@@ -99,13 +126,17 @@ function handleRequest(req: {
           'room/members',
           'message/text',
           'message/image',
+          'message/file',
+          'message/emotion',
           'message/decryptImage',
-          'message/forward(xml)',
+          'message/forward(xml|typed-fallback)',
+          'message/listen',
           'db/*',
           'message/history',
           'sessions',
         ],
-        note: '偏移与发送/解码/XML转发来自 aixed；联系人/群/会话/历史走 contact/session/message_N.db',
+        recvHookRva: getHookedRecvRva() || resolveDoAddMsgRva() || null,
+        note: '发送/解码来自 aixed；ForwardXML 原生偏移无效时走 typed XML 回退；收消息 DoAddMsg 特征扫描；联系人/群/会话/历史走 contact/session/message_N.db',
       })
     }
 
@@ -181,8 +212,16 @@ function handleRequest(req: {
 
     if (path === '/api/message/file' && method === 'POST') {
       const body = parseBody(req.body)
-      const r = messageSendFile(String(body.contactId || ''), String(body.path || ''))
-      return r === -2 ? unsupported('send_file') : r < 0 ? fail('发送失败', r) : ok(r)
+      if (!body.contactId || !body.path) return fail('需要 contactId 和 path')
+      const r = messageSendFile(String(body.contactId), String(body.path))
+      return r < 0 ? fail('发送失败', r) : ok(r)
+    }
+
+    if (path === '/api/message/emotion' && method === 'POST') {
+      const body = parseBody(req.body)
+      if (!body.contactId || !body.path) return fail('需要 contactId 和 path')
+      const r = messageSendEmotion(String(body.contactId), String(body.path))
+      return r < 0 ? fail('发送失败', r) : ok(r)
     }
 
     if (path === '/api/message/pat' && method === 'POST') return unsupported('pat')
@@ -195,11 +234,6 @@ function handleRequest(req: {
         if (!detectXmlKind(String(xml))) {
           return fail('不支持的 XML（需含 <img / <videomsg / <emoji ）')
         }
-        if (!xmlOffsetsLookValid()) {
-          return fail(
-            'XML 转发偏移未校准：aixed Offsets 标注为 4.1.5.30，当前 4.1.10.27 Weixin.dll 虚表无效（已拦截避免崩溃）',
-          )
-        }
         const r = messageForwardXml(String(to), String(xml))
         return r < 0 ? fail('转发失败', r) : ok(r)
       }
@@ -209,11 +243,52 @@ function handleRequest(req: {
       return fail('需要 to_wxid/contactId 与 content/xml（img/videomsg/emoji）')
     }
     if (path === '/api/message/richText' && method === 'POST') return unsupported('richText')
-    if (path === '/api/message/emotion' && method === 'POST') return unsupported('emotion')
     if (path === '/api/message/downloadAttach' && method === 'POST') return unsupported('downloadAttach')
     if (path === '/api/message/audio' && method === 'POST') return unsupported('audio')
     if (path === '/api/sns/refresh' && method === 'POST') return unsupported('sns')
-    if (path === '/api/message/listen') return unsupported('recv hook（aixed RecvType 仅保留配置）')
+    if (path === '/api/message/listen') {
+      if (method === 'POST') {
+        const body = parseBody(req.body)
+        if (body.dump === true || body.armDump) {
+          armMsgStructDump(body.count || 15)
+          clearMsgStructDumps()
+        }
+        if (body.enabled === false) {
+          return ok({
+            enabled: disableRecvMsg() ? false : isRecvMsgEnabled(),
+            rva: getHookedRecvRva() || null,
+            recent: recentMsgs.slice(-10),
+            dumps: getMsgStructDumps(),
+          })
+        }
+        const enabled = enableRecvMsg(onRecvChatMessage)
+        return enabled
+          ? ok({
+              enabled: true,
+              rva: getHookedRecvRva(),
+              recent: recentMsgs.slice(-10),
+              dumps: getMsgStructDumps(),
+            })
+          : fail('DoAddMsg hook 失败', { enabled: false, rva: resolveDoAddMsgRva() })
+      }
+      return ok({
+        enabled: isRecvMsgEnabled(),
+        rva: getHookedRecvRva() || resolveDoAddMsgRva() || null,
+        recent: recentMsgs.slice(-10),
+        dumps: getMsgStructDumps(),
+      })
+    }
+
+    if (path === '/api/message/structDump') {
+      if (method === 'POST') {
+        const body = parseBody(req.body)
+        if (body.clear) clearMsgStructDumps()
+        if (body.arm !== false) armMsgStructDump(body.count || 15)
+        if (!isRecvMsgEnabled()) enableRecvMsg(onRecvChatMessage)
+        return ok({ armed: true, dumps: getMsgStructDumps() })
+      }
+      return ok({ dumps: getMsgStructDumps() })
+    }
     if (path === '/api/sns/listen') return unsupported('sns listen')
     if (path === '/api/push/config') return unsupported('push callback')
 
@@ -297,11 +372,6 @@ function handleRequest(req: {
       const xml = String(body.content || body.xml || '')
       if (!to || !xml) return fail('需要 to_wxid 与 content')
       if (!detectXmlKind(xml)) return fail('不支持的 XML（需含 <img / <videomsg / <emoji ）')
-      if (!xmlOffsetsLookValid()) {
-        return fail(
-          'XML 转发偏移未校准：aixed Offsets 标注为 4.1.5.30，当前 4.1.10.27 Weixin.dll 虚表无效（已拦截避免崩溃）',
-        )
-      }
       const r = messageForwardXml(to, xml)
       return r < 0 ? fail('fail', r) : ok({ ret: 0, retmsg: 'success' })
     }
@@ -351,6 +421,10 @@ rpc.exports = {
   getAudio,
   refreshPyq,
   getMsgTypes,
+  enableRecvMsg,
+  disableRecvMsg,
+  isRecvMsgEnabled,
+  getHookedRecvRva,
   getDbNames,
   getDbTables,
   execDbQuery,
